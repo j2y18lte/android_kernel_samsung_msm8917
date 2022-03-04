@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -10,14 +10,9 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _CAMERA_H
-#define _CAMERA_H
+#ifndef __MSM_JPEG_DMA__
+#define __MSM_JPEG_DMA__
 
-enum stream_state {
-	START_STREAM = 0,
-	STOP_STREAM,
-};
+#include <uapi/media/msm_jpeg_dma.h>
 
-int camera_init_v4l2(struct device *dev, unsigned int *session);
-
-#endif /*_CAMERA_H */
+#endif /* __MSM_JPEG_DMA__ */
