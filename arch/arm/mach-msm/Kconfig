@@ -423,6 +423,26 @@ config MACH_J1Y17LTE_EUR_OPEN
         bool "Samsung J1Y17LTE EUR OPEN"
         help
         Support for Samsung J1Y17LTE EUR OPEN device.
+		
+config SEC_J2Y18LTE_PROJECT
+        depends on ARCH_MSM8937
+        default n
+        bool "Samsung J2Y18LTE Project"
+        help
+        Support for Samsung J2Y18LTE Project
+
+config MACH_J2Y18LTE_MEA_OPEN
+        depends on SEC_J2Y18LTE_PROJECT
+        default n
+        bool "Samsung J2Y18LTE MEA OPEN"
+        help
+        Support for Samsung J2Y18LTE MEA OPEN device.
+config MACH_J2Y18LTE_EUR_OPEN
+        depends on SEC_J2Y18LTE_PROJECT
+        default n
+        bool "Samsung J2Y18LTE EUR OPEN"
+        help
+        Support for Samsung J2Y18LTE EUR OPEN device.
 
 config SEC_GTA2SLTE_PROJECT
   	depends on ARCH_MSM8937

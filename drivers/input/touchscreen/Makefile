@@ -99,5 +99,5 @@ obj-$(CONFIG_TOUCHSCREEN_IST30XXH)	+= imagis_30xxh/
 obj-$(CONFIG_TOUCHSCREEN_FTS7)		+= stm/fts7/
 obj-$(CONFIG_TOUCHSCREEN_FTS8)		+= stm/fts8/
 obj-$(CONFIG_TOUCHSCREEN_SYNAPTICS_INCELL)	+= synaptics_incell/
-obj-$(CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX) += zinitix/
+obj-$(CONFIG_TOUCHSCREEN_ZINITIX_BT431)	+= zinitix/
 

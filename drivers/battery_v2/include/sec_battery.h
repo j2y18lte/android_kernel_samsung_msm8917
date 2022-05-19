@@ -102,7 +102,7 @@
 #define SIOP_HV_12V_CHARGING_LIMIT_CURRENT		1000
 #define SIOP_BROWSING_POWER				5500
 
-#if defined(CONFIG_CCIC_NOTIFIER)
+#if defined(CONFIG_DISABLE_WATER_CONCEPT)
 #define BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE	0x80000000
 #else
 #define BATT_MISC_EVENT_UNDEFINED_RANGE_TYPE	0x00000001
@@ -256,6 +256,9 @@ struct sec_battery_info {
 	unsigned long charging_next_time;
 	unsigned long charging_fullcharged_time;
 
+	unsigned long lcd_on_total_time;
+	unsigned long lcd_on_time;
+
 	/* chg temperature check */
 	unsigned int chg_limit;
 	unsigned int chg_limit_recovery_cable;
@@ -354,6 +357,7 @@ struct sec_battery_info {
 	bool is_hc_usb;
 
 	int threshold_capacity;
+	int r_siop_level;
 	int siop_level;
 	int siop_event;
 	int siop_prev_event;

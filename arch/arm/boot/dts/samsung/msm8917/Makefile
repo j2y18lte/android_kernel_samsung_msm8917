@@ -57,6 +57,23 @@ ifeq ($(CONFIG_SEC_J1Y17LTE_PROJECT),y)
         endif
 endif
 
+ifeq ($(CONFIG_SEC_J2Y18LTE_PROJECT),y)
+        ifeq ($(CONFIG_MACH_J2Y18LTE_MEA_OPEN),y)
+                dtb-y += msm8917-sec-j2y18lte-mea-open-r00.dtb
+                dtb-y += msm8917-sec-j2y18lte-mea-open-r01.dtb
+				dtb-y += msm8917-sec-j2y18lte-mea-open-r02.dtb
+				dtb-y += msm8917-sec-j2y18lte-mea-open-r03.dtb
+				dtb-y += msm8917-sec-j2y18lte-mea-open-r04.dtb
+        endif
+		ifeq ($(CONFIG_MACH_J2Y18LTE_EUR_OPEN),y)
+                dtb-y += msm8917-sec-j2y18lte-eur-open-r00.dtb
+				dtb-y += msm8917-sec-j2y18lte-eur-open-r01.dtb
+				dtb-y += msm8917-sec-j2y18lte-eur-open-r02.dtb
+				dtb-y += msm8917-sec-j2y18lte-eur-open-r03.dtb
+				dtb-y += msm8917-sec-j2y18lte-eur-open-r04.dtb
+        endif
+endif
+
 dtb-$(CONFIG_SEC_GTA2SLTE_PROJECT) += msm8917-sec-gta2slte-r00.dtb \
 					msm8917-sec-gta2slte-r01.dtb \
 					msm8917-sec-gta2slte-r02.dtb \

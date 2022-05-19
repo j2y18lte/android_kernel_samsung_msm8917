@@ -122,11 +122,16 @@ enum {
 
 #define REDUCE_CURRENT_STEP				100
 #define MINIMUM_INPUT_CURRENT			300
-#if defined(CONFIG_TABLET_MODEL_CONCEPT)
+#if defined(CONFIG_TABLET_MODEL_CONCEPT) && !defined(CONFIG_SEC_FACTORY)
 #define SLOW_CHARGING_CURRENT_STANDARD	999
 #else
 #define SLOW_CHARGING_CURRENT_STANDARD	400
 #endif
+
+#define ENABLE 1
+#define DISABLE 0
+
+extern bool sec_bat_get_slate_mode(void);
 
 extern sec_battery_platform_data_t sec_battery_pdata;
 extern int poweroff_charging;

@@ -225,8 +225,7 @@ int msm_sensor_power_up(struct msm_sensor_ctrl_t *s_ctrl)
 		rc = msm_camera_power_up(power_info, s_ctrl->sensor_device_type,
 			sensor_i2c_client);
 		if (rc < 0)
-			//return rc;
-			return 0; //temp for 8996
+			return rc;
 		rc = msm_sensor_check_id(s_ctrl);
 		if (rc < 0) {
 			msm_camera_power_down(power_info,
@@ -296,7 +295,7 @@ int msm_sensor_match_id(struct msm_sensor_ctrl_t *s_ctrl)
 #endif
 	}
 
-	pr_debug("%s: read id: 0x%x expected id 0x%x:\n",
+	pr_err("%s: read id: 0x%x expected id 0x%x:\n",
 			__func__, chipid, slave_info->sensor_id);
 	if (msm_sensor_id_by_mask(s_ctrl, chipid) != slave_info->sensor_id) {
 		pr_err("%s chip id %x does not match %x\n",
@@ -556,9 +555,8 @@ static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 		struct msm_camera_i2c_read_config *read_config_ptr = NULL;
 		uint16_t local_data = 0;
 		uint16_t orig_slave_addr = 0, read_slave_addr = 0;
-#if !defined(CONFIG_SEC_C7PROLTE_CHN) && !defined(CONFIG_SEC_C7PROLTE_SWA) && !defined(CONFIG_SEC_C5PROLTE_CHN)
 		uint16_t orig_addr_type = 0, read_addr_type = 0;
-#endif
+
 		if (s_ctrl->is_csid_tg_mode)
 			goto DONE;
 
@@ -573,9 +571,8 @@ static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 			break;
 		}
 		read_slave_addr = read_config.slave_addr;
-#if !defined(CONFIG_SEC_C7PROLTE_CHN) && !defined(CONFIG_SEC_C7PROLTE_SWA) && !defined(CONFIG_SEC_C5PROLTE_CHN)
 		read_addr_type = read_config.addr_type;
-#endif
+
 		CDBG("%s:CFG_SLAVE_READ_I2C:", __func__);
 		CDBG("%s:slave_addr=0x%x reg_addr=0x%x, data_type=%d\n",
 			__func__, read_config.slave_addr,
@@ -598,15 +595,14 @@ static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 		CDBG("%s:orig_slave_addr=0x%x, new_slave_addr=0x%x",
 				__func__, orig_slave_addr,
 				read_slave_addr >> 1);
-#if !defined(CONFIG_SEC_C7PROLTE_CHN) && !defined(CONFIG_SEC_C7PROLTE_SWA) && !defined(CONFIG_SEC_C5PROLTE_CHN)
+
 		orig_addr_type = s_ctrl->sensor_i2c_client->addr_type;
 		s_ctrl->sensor_i2c_client->addr_type = read_addr_type;
-#endif
+
 		rc = s_ctrl->sensor_i2c_client->i2c_func_tbl->i2c_read(
 				s_ctrl->sensor_i2c_client,
 				read_config.reg_addr,
 				&local_data, read_config.data_type);
-#if !defined(CONFIG_SEC_C7PROLTE_CHN) && !defined(CONFIG_SEC_C7PROLTE_SWA) && !defined(CONFIG_SEC_C5PROLTE_CHN)
 		if (s_ctrl->sensor_i2c_client->cci_client) {
 			s_ctrl->sensor_i2c_client->cci_client->sid =
 				orig_slave_addr;
@@ -618,7 +614,7 @@ static int msm_sensor_config32(struct msm_sensor_ctrl_t *s_ctrl,
 
 		pr_debug("slave_read %x %x %x\n", read_slave_addr,
 			read_config.reg_addr, local_data);
-#endif
+
 		if (rc < 0) {
 			pr_err("%s:%d: i2c_read failed\n", __func__, __LINE__);
 			break;
@@ -1617,8 +1613,7 @@ int msm_sensor_check_id(struct msm_sensor_ctrl_t *s_ctrl)
 		rc = msm_sensor_match_id(s_ctrl);
 	if (rc < 0)
 		pr_err("%s:%d match id failed rc %d\n", __func__, __LINE__, rc);
-	//return rc;
-	return 0;    //temp for 8996
+	return rc;
 }
 
 static int msm_sensor_power(struct v4l2_subdev *sd, int on)

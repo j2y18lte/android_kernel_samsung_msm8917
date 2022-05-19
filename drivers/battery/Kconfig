@@ -49,6 +49,13 @@ config BATTERY_AGE_FORECAST
 	help
 	Say Y to use enable age forecast algorithm.
 
+config BATTERY_AGE_FORECAST_DETACHABLE
+	tristate "battery age forecast for detachable"
+	default n
+	select BATTERY_AGE_FORECAST
+	help
+	Say Y to use battery age forecast for detachable
+
 config STEP_CHARGING
 	bool "support for step charging"
 	help
@@ -612,10 +619,3 @@ config ENABLE_100MA_CHARGING_BEFORE_USB_CONFIGURED
 	default n
 	help
 	  Say Y to enable 100mA before usb configured
-
-config CHANGE_VBUS_VOLTAGE
-	bool "enable change vbus voltage"
-	default n
-	help
-	  Say Y to enable CONFIG_CHANGE_VBUS_VOLTAGE
-

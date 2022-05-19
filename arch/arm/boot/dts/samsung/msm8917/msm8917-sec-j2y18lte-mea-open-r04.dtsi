@@ -47,6 +47,16 @@
 		qcom,hw-settle-time = <5>;
 		qcom,fast-avg-setup = <0>;
 	};
+	chan@36 {
+		label = "pa_therm0";
+		reg = <0x36>;
+		qcom,decimation = <0>;
+		qcom,pre-div-channel-scaling = <0>;
+		qcom,calibration-type = "ratiometric";
+		qcom,scale-function = <2>;
+		qcom,hw-settle-time = <2>;
+		qcom,fast-avg-setup = <0>;
+	};
 };
 
 &pm8937_mpps {
@@ -109,9 +119,9 @@
 			compatible = "abov,a96t316xx";	
 			
 			pinctrl-names = "default", "idle", "sleep";
-			pinctrl-0 = <&tkey_gpio &tkey_i2c_active &tkey_int_active>;
-			pinctrl-1 = <&tkey_i2c_active &tkey_int_active>;
-			pinctrl-2 = <&tkey_i2c_suspend &tkey_int_suspend>;
+			pinctrl-0 = <&tkey_power_suspend &tkey_i2c_suspend &tkey_int_suspend>;
+			pinctrl-1 = <&tkey_power_active &tkey_i2c_active &tkey_int_active>;
+			pinctrl-2 = <&tkey_power_suspend &tkey_i2c_suspend &tkey_int_suspend>;
 			interrupt-parent = <&tlmm>;
 			interrupts = <124 0>;
 			abov,irq-gpio = <&tlmm 124 0>;
@@ -120,7 +130,6 @@
 			abov,power-gpio = <&tlmm 95 0>;
 			abov,power-gpioen; /* abov,power-gpioen - enable by GPIO, abov,power-ldoen -> enable by ldo */
 			abov,fw_path = "abov/a96t316au_j2y18.fw";
-			abov,bringup = "true";
 		};
 	};
 
@@ -139,11 +148,13 @@
 			imagis,power-gpioen; /* imagis,power-gpioen - enable by GPIO, imagis,power-ldoen -> enable by ldo */
 			imagis,power-gpio = <&tlmm 91 0>;
 			imagis,fw-bin = <1>;
-			imagis,octa-hw = <0>;
+			imagis,octa-hw = <1>;
+			imagis,resolution = <540 960>;/* x y */
+			imagis,area-size = <36 72 60>; /* indicator: 24dp~36px navigator:48dp edge:60px*/
 			imagis,ic-version = "ist3038h";
-			imagis,project-name = "j2y18";
-			imagis,pat_function = <1>;
-			imagis,afe_base = <0x0000>;
+			imagis,project-name = "j2y18_octa";
+			imagis,tclm_level = <0x02>;
+			imagis,afe_base = <0x0109>;
 		};
 	};
 
@@ -209,10 +220,10 @@
 			stk,ledctrl-reg = <0xBF>;
 			stk,wait-reg = <0x03>;
 			stk,ps-thd-h = <20>;
-			stk,ps-thd-l = <13>;
+			stk,ps-thd-l = <10>;
 			stk,ps-cancel-thd-h = <10>;
 			stk,ps-cancel-thd-l = <7>;
-			stk,ps-cal-skip-adc = <10>;
+			stk,ps-cal-skip-adc = <7>;
 			stk,ps-cal-fail-adc = <23>;
 			stk,ps-default-offset = <3>;
 			stk,transmittance = <500>;
@@ -266,7 +277,7 @@
 		det-zones-list = <&det_zones 0 10000 10 2>,
 				 <&det_zones 710 10000 10 2>,
 				 <&det_zones 711 10000 10 1>,
-				 <&det_zones 1700 10000 10 1>;
+				 <&det_zones 1750 10000 10 1>;
 		but-zones-list = <&but_zones 226 0 228>, /* KEY_MEDIA:226 */
 				 <&but_zones 582 229 263>, /* KEY_VOICECOMMAND:582 */
 				 <&but_zones 115 264 350>, /* KEY_VOLUMEUP:115 */

@@ -15,6 +15,7 @@ source "drivers/input/touchscreen/synaptics_dsx/Kconfig"
 source "drivers/input/touchscreen/synaptics_dsx_2.6/Kconfig"
 source "drivers/input/touchscreen/imagis_30xxc/Kconfig"
 source "drivers/input/touchscreen/imagis_30xxh/Kconfig"
+source "drivers/input/touchscreen/zinitix/Kconfig"
 
 config OF_TOUCHSCREEN
 	#def_tristate INPUT
@@ -1140,5 +1141,4 @@ source "drivers/input/touchscreen/himax/Kconfig"
 source "drivers/input/touchscreen/stm/fts7/Kconfig"
 source "drivers/input/touchscreen/stm/fts8/Kconfig"
 source "drivers/input/touchscreen/synaptics_incell/Kconfig"
-source "drivers/input/touchscreen/zinitix/Kconfig"
 endif

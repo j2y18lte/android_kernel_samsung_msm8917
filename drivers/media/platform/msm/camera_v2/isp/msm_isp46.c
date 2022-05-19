@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -472,8 +472,8 @@ static void msm_vfe46_process_reg_update(struct vfe_device *vfe_dev,
 
 			switch (i) {
 			case VFE_PIX_0:
-				msm_isp_save_framedrop_values(vfe_dev,
-							VFE_PIX_0);
+				/*msm_isp_save_framedrop_values(vfe_dev,
+							VFE_PIX_0);*/
 				msm_isp_notify(vfe_dev, ISP_EVENT_REG_UPDATE,
 					VFE_PIX_0, ts);
 				if (atomic_read(
@@ -503,6 +503,7 @@ static void msm_vfe46_process_reg_update(struct vfe_device *vfe_dev,
 			}
 			if (vfe_dev->axi_data.stream_update[i])
 				msm_isp_axi_stream_update(vfe_dev, i);
+			msm_isp_save_framedrop_values(vfe_dev, i); 
 			if (atomic_read(&vfe_dev->axi_data.axi_cfg_update[i])) {
 				msm_isp_axi_cfg_update(vfe_dev, i);
 				if (atomic_read(
@@ -901,8 +902,10 @@ static int msm_vfe46_start_fetch_engine(struct vfe_device *vfe_dev,
 			fe_cfg->stream_id);
 		vfe_dev->fetch_engine_info.bufq_handle = bufq_handle;
 
+		mutex_lock(&vfe_dev->buf_mgr->lock);
 		rc = vfe_dev->buf_mgr->ops->get_buf_by_index(
 			vfe_dev->buf_mgr, bufq_handle, fe_cfg->buf_idx, &buf);
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		if (rc < 0 || !buf) {
 			pr_err("%s: No fetch buffer rc= %d buf= %pK\n",
 				__func__, rc, buf);
@@ -1455,7 +1458,6 @@ static void msm_vfe46_cfg_axi_ub_equal_slicing(
 		axi_data->hw_info->num_wm;
 	} else {
 		pr_err("%s: incorrect VFE device\n ", __func__);
-		return;
 	}
 	for (i = 0; i < axi_data->hw_info->num_wm; i++) {
 		msm_camera_io_w(ub_offset << 16 | (ub_equal_slice - 1),
@@ -1803,10 +1805,9 @@ static void msm_vfe46_stats_cfg_ub(struct vfe_device *vfe_dev)
 		ub_offset = VFE46_UB_SIZE_VFE1;
 	else if (vfe_dev->pdev->id == ISP_VFE0)
 		ub_offset = VFE46_UB_SIZE_VFE0;
-	else {
+	else
 		pr_err("%s: incorrect VFE device\n", __func__);
-		return;
-	}
+
 	for (i = 0; i < VFE46_NUM_STATS_TYPE; i++) {
 		ub_offset -= ub_size[i];
 		msm_camera_io_w(VFE46_STATS_BURST_LEN << 30 |

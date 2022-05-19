@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -533,8 +533,8 @@ static void msm_vfe44_process_reg_update(struct vfe_device *vfe_dev,
 				(uint32_t)BIT(i));
 			switch (i) {
 			case VFE_PIX_0:
-				msm_isp_save_framedrop_values(vfe_dev,
-						VFE_PIX_0);
+				/*msm_isp_save_framedrop_values(vfe_dev,
+						VFE_PIX_0);*/
 				msm_isp_notify(vfe_dev, ISP_EVENT_REG_UPDATE,
 					VFE_PIX_0, ts);
 				if (atomic_read(
@@ -564,6 +564,7 @@ static void msm_vfe44_process_reg_update(struct vfe_device *vfe_dev,
 			}
 			if (vfe_dev->axi_data.stream_update[i])
 				msm_isp_axi_stream_update(vfe_dev, i);
+			msm_isp_save_framedrop_values(vfe_dev, i); 
 			if (atomic_read(&vfe_dev->axi_data.axi_cfg_update[i])) {
 				msm_isp_axi_cfg_update(vfe_dev, i);
 				if (atomic_read(
@@ -956,8 +957,11 @@ static int msm_vfe44_fetch_engine_start(struct vfe_device *vfe_dev,
 			vfe_dev->buf_mgr, fe_cfg->session_id,
 			fe_cfg->stream_id);
 		vfe_dev->fetch_engine_info.bufq_handle = bufq_handle;
+
+		mutex_lock(&vfe_dev->buf_mgr->lock);
 		rc = vfe_dev->buf_mgr->ops->get_buf_by_index(
 			vfe_dev->buf_mgr, bufq_handle, fe_cfg->buf_idx, &buf);
+		mutex_unlock(&vfe_dev->buf_mgr->lock);
 		if (rc < 0) {
 			pr_err("%s: No fetch buffer\n", __func__);
 			return -EINVAL;

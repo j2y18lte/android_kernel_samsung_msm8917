@@ -55,7 +55,10 @@
 #define SIOP_EVENT_NONE 	0x0000
 #define SIOP_EVENT_WPC_CALL 	0x0001
 
-#if defined(CONFIG_CHARGING_VZWCONCEPT)
+#if defined(CONFIG_SEC_FACTORY)
+#define STORE_MODE_CHARGING_MAX 80
+#define STORE_MODE_CHARGING_MIN 70
+#elif defined(CONFIG_CHARGING_VZWCONCEPT)
 #define STORE_MODE_CHARGING_MAX 35
 #define STORE_MODE_CHARGING_MIN 30
 #else
@@ -233,7 +236,6 @@ struct sec_battery_info {
 	bool is_jig_on;
 	int wdt_kick_disable;
 	int cable_type;
-	int vbus_chg_by_siop;
 	int muic_cable_type;
 #if defined(CONFIG_VBUS_NOTIFIER)
 	int muic_vbus_status;
@@ -486,6 +488,9 @@ enum {
 	FG_FULL_VOLTAGE,
 	FG_FULLCAPNOM,
 	BATTERY_CYCLE,
+#if defined(CONFIG_BATTERY_AGE_FORECAST_DETACHABLE)
+	BATT_AFTER_MANUFACTURED,
+#endif
 #endif
 	BATT_WPC_TEMP,
 	BATT_WPC_TEMP_ADC,

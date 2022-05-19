@@ -65,6 +65,7 @@ Copyright (C) 2012, Samsung Electronics. All rights reserved.
 #include "../../mdss/mdss_dsi.h"
 #include "../../mdss/mdss_debug.h"
 #include "ss_dpui_common.h"
+#include "../../../../../fs/sysfs/sysfs.h"
 
 #if defined(CONFIG_SEC_DEBUG)
 #include <linux/sec_debug.h>
@@ -515,6 +516,9 @@ struct samsung_display_dtsi_data {
 
 	/* SPI I/F enable */
 	struct dsi_panel_cmds spi_enable_tx_cmds[SUPPORT_PANEL_REVISION];
+	
+	/* UX color bit support */
+	int ux_bit_support;
 };
 
 struct samsung_brightenss_data {
@@ -1084,7 +1088,6 @@ struct BITMAPFILEHEADER                 /**** BMP file header structure ****/
 	unsigned int   biClrUsed;        /* Number of colors used */
 	unsigned int   biClrImportant;   /* Number of important colors */
 } __packed;
-
 extern struct kset *devices_kset;
 
 /* SAMSUNG COMMON HEADER*/

@@ -122,6 +122,7 @@ struct sm5705_charger_data {
 	int irq_wpcin_pok;
 	int irq_topoff;
 	int irq_done;
+	int irq_otgfail;
 
 	/* for Workqueue & wake-lock, mutex process */
 	struct mutex charger_mutex;

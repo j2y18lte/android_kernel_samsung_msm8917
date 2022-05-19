@@ -38,31 +38,24 @@
 #include <linux/uaccess.h>
 #include <linux/regulator/consumer.h>
 
-#include <linux/i2c/zinitix_bt532_ts.h>
+#include "zinitix_bt532_ts.h"
 #include <linux/input/mt.h>
 
-#include <linux/sec_class.h>
 #include <linux/of_gpio.h>
 #include <linux/firmware.h>
+#include <linux/sec_class.h>
+
 #ifdef CONFIG_VBUS_NOTIFIER
 #include <linux/muic/muic.h>
 #include <linux/muic/muic_notifier.h>
 #include <linux/vbus_notifier.h>
 #endif
-#if defined(CONFIG_SECURE_TOUCH)
-#include <linux/completion.h>
-#include <linux/atomic.h>
-#include <linux/pm_runtime.h>
-#include <linux/clk.h>
-#endif
 
-#define CONFIG_INPUT_ENABLED
+//#define CONFIG_INPUT_ENABLED
 #define SEC_FACTORY_TEST
+#define USE_PIN_CTRL
 
 #define NOT_SUPPORTED_TOUCH_DUMMY_KEY
-
-/* PAT MODE */
-#define PAT_CONTROL
 
 #define MAX_FW_PATH 255
 #define TSP_FW_FILENAME "zinitix_fw.bin"
@@ -71,15 +64,9 @@
 #include <linux/input/input_booster.h>
 #endif
 
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-#include <linux/trustedui.h>
-#endif
-
 #ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
 #define SUPPORTED_PALM_TOUCH
 #endif
-
-extern char *saved_command_line;
 
 #define ZINITIX_DEBUG				0
 #define PDIFF_DEBUG					1
@@ -89,7 +76,11 @@ extern char *saved_command_line;
 
 /* added header file */
 
+#ifdef SUPPORTED_PALM_TOUCH
+#define TOUCH_POINT_MODE			2
+#else
 #define TOUCH_POINT_MODE			0
+#endif
 
 #define MAX_SUPPORTED_FINGER_NUM	5 /* max 10 */
 
@@ -115,7 +106,7 @@ name = "zinitix_isp" , addr 0x50*/
 
 #define CHIP_OFF_DELAY			50 /*ms*/
 #ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-#define CHIP_ON_DELAY			50 /*ms*/
+#define CHIP_ON_DELAY			200 /*ms*/
 #define FIRMWARE_ON_DELAY		150 /*ms*/
 #else
 #define CHIP_ON_DELAY			40 /*ms*/
@@ -142,7 +133,7 @@ enum key_event {
 /* ESD Protection */
 /*second : if 0, no use. if you have to use, 3 is recommended*/
 #define ESD_TIMER_INTERVAL			1
-#define SCAN_RATE_HZ				1000
+#define SCAN_RATE_HZ				100
 #define CHECK_ESD_TIMER				3
 
 /*Test Mode (Monitoring Raw Data) */
@@ -153,35 +144,11 @@ enum key_event {
 
 #define	SEC_DND_N_COUNT			11
 #define	SEC_DND_U_COUNT			16
-#define	SEC_DND_FREQUENCY		139
+#define	SEC_DND_FREQUENCY		149
 
 #define	SEC_HFDND_N_COUNT		11
 #define	SEC_HFDND_U_COUNT		16
-#define	SEC_HFDND_FREQUENCY		104
-
-#define	SEC_SX_AMP_V_SEL		0x0434
-#define	SEC_SX_SUB_V_SEL		0x0055
-#define	SEC_SY_AMP_V_SEL		0x0232
-#define	SEC_SY_SUB_V_SEL		0x0022
-#define	SEC_SHORT_N_COUNT		2
-#define	SEC_SHORT_U_COUNT		1
-
-#define SEC_SY_SAT_FREQUENCY	200
-#define SEC_SY_SAT_N_COUNT		9
-#define SEC_SY_SAT_U_COUNT		9
-#define SEC_SY_SAT_RS0_TIME		0x00FF
-#define SEC_SY_SAT_RBG_SEL		0x0404
-#define SEC_SY_SAT_AMP_V_SEL	0x0434
-#define SEC_SY_SAT_SUB_V_SEL	0x0044
-
-#define SEC_SY_SAT2_FREQUENCY	200
-#define SEC_SY_SAT2_N_COUNT		9
-#define SEC_SY_SAT2_U_COUNT		3
-#define SEC_SY_SAT2_RS0_TIME	0x00FF
-#define SEC_SY_SAT2_RBG_SEL		0x0404
-#define SEC_SY_SAT2_AMP_V_SEL	0x0434
-#define SEC_SY_SAT2_SUB_V_SEL	0x0011
-
+#define	SEC_HFDND_FREQUENCY		112
 #else
 #define SEC_DND_N_COUNT			10
 #define SEC_DND_U_COUNT			10
@@ -198,42 +165,14 @@ enum key_event {
 
 #define RAWDATA_DELAY_FOR_HOST		100
 
-#ifdef PAT_CONTROL
-/*------------------------------
-	<<< apply to server >>>
-	0x00 : no action
-	0x01 : clear nv
-	0x02 : pat magic
-	0x03 : rfu
-
-	<<< use for temp bin >>>
-	0x05 : forced clear nv & f/w update before pat magic, eventhough same f/w
-	0x06 : rfu
--------------------------------*/
-#define PAT_CONTROL_NONE			0x00
-#define PAT_CONTROL_CLEAR_NV		0x01
-#define PAT_CONTROL_PAT_MAGIC		0x02
-#define PAT_CONTROL_FORCE_UPDATE	0x05
-#define PAT_CONTROL_FORCE_CMD		0x06	//run_force_calibration
-
-#define PAT_MAX_LCIA				0x80
-#define PAT_MAX_MAGIC			0xF5
-#define PAT_MAGIC_NUMBER		0x83
-/*addr*/
-#define PAT_TSP_TEST_DATA		0x00
-#define PAT_CAL_COUNT			0x02
-#define PAT_FIX_VERSION_0 			0x04
-#define PAT_FIX_VERSION_1 			0x06
-#endif
-
 struct raw_ioctl {
-	u32 sz;
-	u32 buf;
+	int sz;
+	u8 *buf;
 };
 
 struct reg_ioctl {
-	u32 addr;
-	u32 val;
+	int addr;
+	int *val;
 };
 
 #define TOUCH_SEC_MODE				48
@@ -241,13 +180,7 @@ struct reg_ioctl {
 #define TOUCH_NORMAL_MODE			5
 #define TOUCH_DELTA_MODE			3
 //#define TOUCH_SDND_MODE				6
-#define TOUCH_REFERENCE_MODE			8
 #define TOUCH_DND_MODE				11
-#define TOUCH_RXSHORT_MODE			12
-#define TOUCH_TXSHORT_MODE			13
-#define TOUCH_JITTER_MODE			15
-#define TOUCH_SELF_DND_MODE			17
-#define TOUCH_REF_ABNORMAL_TEST_MODE		33
 
 /*  Other Things */
 #define INIT_RETRY_CNT				3
@@ -258,10 +191,7 @@ struct reg_ioctl {
 
 /* chip code */
 #define BT43X_CHIP_CODE		0xE200
-#define BT53X_CHIP_CODE		0xF400
 #define ZT7548_CHIP_CODE	0xE548
-#define ZT7538_CHIP_CODE	0xE538
-#define ZT7532_CHIP_CODE	0xE532
 #define ZT7554_CHIP_CODE	0xE700
 
 /* Register Map*/
@@ -279,7 +209,7 @@ struct reg_ioctl {
 
 #define BT532_THRESHOLD						0x0020
 
-#define BT532_DEBUG_REG						0x0115
+#define BT532_DEBUG_REG						0x0115 /* 0~7 */
 
 #define BT532_TOUCH_MODE					0x0010
 #define BT532_CHIP_REVISION					0x0011
@@ -310,15 +240,6 @@ struct reg_ioctl {
 #define BT532_POINT_STATUS_REG				0x0080
 #define BT532_ICON_STATUS_REG				0x00AA
 
-#define ZT75XX_SET_AOD_X_REG				0x00AB
-#define ZT75XX_SET_AOD_Y_REG				0x00AC
-#define ZT75XX_SET_AOD_W_REG				0x00AD
-#define ZT75XX_SET_AOD_H_REG				0x00AE
-#define ZT75XX_LPM_MODE_REG				0x00AF
-
-#define ZT75XX_GET_AOD_X_REG				0x0191
-#define ZT75XX_GET_AOD_Y_REG				0x0192
-
 #define BT532_DND_SHIFT_VALUE	0x012B
 #define BT532_AFE_FREQUENCY					0x0100
 #define BT532_DND_N_COUNT					0x0122
@@ -326,14 +247,14 @@ struct reg_ioctl {
 
 #define BT532_RAWDATA_REG					0x0200
 
+#define BT532_EEPROM_INFO_REG				0x0018
+
 #define BT532_INT_ENABLE_FLAG				0x00f0
 #define BT532_PERIODICAL_INTERRUPT_INTERVAL	0x00f1
 #ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
 #define BT532_BTN_WIDTH						0x0316
-#define BT532_REAL_WIDTH					0x03A6
 #else
 #define BT532_BTN_WIDTH						0x016d
-#define BT532_REAL_WIDTH					0x01C0
 #endif
 
 #define BT532_CHECKSUM_RESULT				0x012c
@@ -345,34 +266,10 @@ struct reg_ioctl {
 #define ZINITIX_INTERNAL_FLAG_03		0x011f
 
 #define BT532_OPTIONAL_SETTING				0x0116
-#define BT532_COVER_CONTROL_REG			0x023E
 
 #ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
 #define ZT75XX_RESOLUTION_EXPANDER			0x0186
 #define ZT75XX_MUTUAL_AMP_V_SEL			0x02F9
-#define ZT75XX_SX_AMP_V_SEL				0x02DF
-#define ZT75XX_SX_SUB_V_SEL				0x02E0
-#define ZT75XX_SY_AMP_V_SEL				0x02EC
-#define ZT75XX_SY_SUB_V_SEL				0x02ED
-#define ZT75XX_CHECKSUM					0x03DF
-#define ZT75XX_JITTER_SAMPLING_CNT			0x001F
-
-#define ZT75XX_SY_SAT_FREQUENCY			0x03E0
-#define ZT75XX_SY_SAT_N_COUNT			0x03E1
-#define ZT75XX_SY_SAT_U_COUNT			0x03E2
-#define ZT75XX_SY_SAT_RS0_TIME			0x03E3
-#define ZT75XX_SY_SAT_RBG_SEL			0x03E4
-#define ZT75XX_SY_SAT_AMP_V_SEL			0x03E5
-#define ZT75XX_SY_SAT_SUB_V_SEL			0x03E6
-
-#define ZT75XX_SY_SAT2_FREQUENCY		0x03E7
-#define ZT75XX_SY_SAT2_N_COUNT			0x03E8
-#define ZT75XX_SY_SAT2_U_COUNT			0x03E9
-#define ZT75XX_SY_SAT2_RS0_TIME			0x03EA
-#define ZT75XX_SY_SAT2_RBG_SEL			0x03EB
-#define ZT75XX_SY_SAT2_AMP_V_SEL		0x03EC
-#define ZT75XX_SY_SAT2_SUB_V_SEL		0x03ED
-
 #endif
 
 /* Interrupt & status register flag bit
@@ -384,7 +281,7 @@ struct reg_ioctl {
 #define BIT_UP			3
 #define BIT_PALM		4
 #define BIT_PALM_REJECT		5
-#define BIT_GESTURE		6
+#define RESERVED_0		6
 #define RESERVED_1		7
 #define BIT_WEIGHT_CHANGE	8
 #define BIT_PT_NO_CHANGE	9
@@ -422,37 +319,6 @@ struct reg_ioctl {
 #define SUB_BIT_UPDATE		4
 #define SUB_BIT_WAIT		5
 
-/* BT532_DEBUG_REG */
-#define DEF_DEVICE_STATUS_NPM			0
-#define DEF_DEVICE_STATUS_WALLET_COVER_MODE	1
-#define DEF_DEVICE_STATUS_NOISE_MODE		2
-#define DEF_DEVICE_STATUS_WATER_MODE		3
-#define DEF_DEVICE_STATUS_LPM__MODE		4
-#define DEF_DEVICE_STATUS_PALM_DETECT		10
-#define DEF_DEVICE_STATUS_SVIEW_MODE		11
-
-/* BT532_BT532_COVER_CONTROL_REG */
-#define WALLET_COVER_CLOSE	0x0000
-#define VIEW_COVER_CLOSE	0x0100
-#define COVER_OPEN			0x0200
-#define LED_COVER_CLOSE		0x0700
-#define CLEAR_COVER_CLOSE	0x0800
-
-enum zt_cover_id {
-	ZT_FLIP_WALLET = 0,
-	ZT_VIEW_COVER,
-	ZT_COVER_NOTHING1,
-	ZT_VIEW_WIRELESS,
-	ZT_COVER_NOTHING2,
-	ZT_CHARGER_COVER,
-	ZT_VIEW_WALLET,
-	ZT_LED_COVER,
-	ZT_CLEAR_FLIP_COVER,
-	ZT_QWERTY_KEYBOARD_EUR,
-	ZT_QWERTY_KEYBOARD_KOR,
-	ZT_NEON_COVER,
-	ZT_MONTBLANC_COVER = 100,
-};
 
 #define zinitix_bit_set(val, n)		((val) &= ~(1<<(n)), (val) |= (1<<(n)))
 #define zinitix_bit_clr(val, n)		((val) &= ~(1<<(n)))
@@ -468,25 +334,14 @@ enum zt_cover_id {
 #define	DEF_OPTIONAL_MODE_DUO_TOUCH		4
 /* end header file */
 
-#define BIT_EVENT_SPAY	1
-#define BIT_EVENT_AOD	2
-
-typedef enum {
-	SPONGE_EVENT_TYPE_SPAY			= 0x04,
-	SPONGE_EVENT_TYPE_AOD			= 0x08,
-	SPONGE_EVENT_TYPE_AOD_PRESS		= 0x09,
-	SPONGE_EVENT_TYPE_AOD_LONGPRESS		= 0x0A,
-	SPONGE_EVENT_TYPE_AOD_DOUBLETAB		= 0x0B
-} SPONGE_EVENT_TYPE;
-
 #ifdef SEC_FACTORY_TEST
 /* Touch Screen */
 #define TSP_CMD_STR_LEN			32
-#define TSP_CMD_RESULT_STR_LEN		3240	//30*18*6
+#define TSP_CMD_RESULT_STR_LEN		512
 #define TSP_CMD_PARAM_NUM		8
 #ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-#define TSP_CMD_X_NUM			30
-#define TSP_CMD_Y_NUM			18
+#define TSP_CMD_X_NUM			18
+#define TSP_CMD_Y_NUM			30
 #else
 #define TSP_CMD_X_NUM			18
 #define TSP_CMD_Y_NUM			10
@@ -497,7 +352,7 @@ typedef enum {
 struct tsp_factory_info {
 	struct list_head cmd_list_head;
 	char cmd[TSP_CMD_STR_LEN];
-	int cmd_param[TSP_CMD_PARAM_NUM];
+	char cmd_param[TSP_CMD_PARAM_NUM];
 	char cmd_result[TSP_CMD_RESULT_STR_LEN];
 	char cmd_buff[TSP_CMD_RESULT_STR_LEN];
 	struct mutex cmd_lock;
@@ -511,57 +366,7 @@ struct tsp_raw_data {
 	s16 delta_data[TSP_CMD_NODE_NUM];
 	s16 vgap_data[TSP_CMD_NODE_NUM];
 	s16 hgap_data[TSP_CMD_NODE_NUM];
-#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-	s16 rxshort_data[TSP_CMD_NODE_NUM];
-	s16 txshort_data[TSP_CMD_NODE_NUM];
-	s16 selfdnd_data[TSP_CMD_NODE_NUM];
-	s16 self_sat_dnd_data[TSP_CMD_NODE_NUM];
-	s16 self_hgap_data[TSP_CMD_NODE_NUM];
-	s16 jitter_data[TSP_CMD_NODE_NUM];
-	s16 reference_data[TSP_CMD_NODE_NUM];
-	s16 reference_data_abnormal[TSP_CMD_NODE_NUM];
-#endif
 };
-
-#ifdef PAT_CONTROL
-/* ----------------------------------------
- * write 0xE4 [ 11 | 10 | 01 | 00 ]
- * MSB <-------------------> LSB
- * read 0xE4
- * mapping sequnce : LSB -> MSB
- * struct sec_ts_test_result {
- * * assy : front + OCTA assay
- * * module : only OCTA
- *	 union {
- *		 struct {
- *			 u8 assy_count:2;	-> 00
- *			 u8 assy_result:2;	-> 01
- *			 u8 module_count:2;	-> 10
- *			 u8 module_result:2;	-> 11
- *		 } __attribute__ ((packed));
- *		 unsigned char data[1];
- *	 };
- *};
- * ----------------------------------------
- */
-struct ts_test_result {
-	union {
-		struct {
-			u8 assy_count:2;
-			u8 assy_result:2;
-			u8 module_count:2;
-			u8 module_result:2;
-		} __attribute__ ((packed));
-		unsigned char data[1];
-	};
-};
-#define TEST_OCTA_MODULE	1
-#define TEST_OCTA_ASSAY		2
-
-#define TEST_OCTA_NONE		0
-#define TEST_OCTA_FAIL		1
-#define TEST_OCTA_PASS		2
-#endif
 
 enum {
 	WAITING = 0,
@@ -577,8 +382,71 @@ struct tsp_cmd {
 	void (*cmd_func)(void *device_data);
 };
 
+static void fw_update(void *device_data);
+static void get_fw_ver_bin(void *device_data);
+static void get_fw_ver_ic(void *device_data);
+static void get_threshold(void *device_data);
+static void module_off_master(void *device_data);
+static void module_on_master(void *device_data);
+static void module_off_slave(void *device_data);
+static void module_on_slave(void *device_data);
+static void get_chip_vendor(void *device_data);
+static void get_chip_name(void *device_data);
+static void get_x_num(void *device_data);
+static void get_y_num(void *device_data);
+static void not_support_cmd(void *device_data);
+
+/* Vendor dependant command */
+static void run_dnd_read(void *device_data);
+static void get_dnd(void * device_data);
+static void run_hfdnd_read(void *device_data);
+static void get_hfdnd(void * device_data);
+static void run_dnd_v_gap_read(void *device_data);
+static void get_dnd_v_gap(void * device_data);
+static void run_dnd_h_gap_read(void *device_data);
+static void get_dnd_h_gap(void * device_data);
+static void run_delta_read(void *device_data);
+static void get_delta(void *device_data);
+static void clear_cover_mode(void *device_data);
+static void get_module_vendor(void *device_data);
+static void clear_reference_data(void *device_data);
+static void run_ref_calibration(void *device_data);
+static void dead_zone_enable(void *device_data);
+
 #define TSP_CMD(name, func) .cmd_name = name, .cmd_func = func
 
+static struct tsp_cmd tsp_cmds[] = {
+	{TSP_CMD("fw_update", fw_update),},
+	{TSP_CMD("get_fw_ver_bin", get_fw_ver_bin),},
+	{TSP_CMD("get_fw_ver_ic", get_fw_ver_ic),},
+	{TSP_CMD("get_threshold", get_threshold),},
+	{TSP_CMD("module_off_master", module_off_master),},
+	{TSP_CMD("module_on_master", module_on_master),},
+	{TSP_CMD("module_off_slave", module_off_slave),},
+	{TSP_CMD("module_on_slave", module_on_slave),},
+	{TSP_CMD("get_module_vendor", get_module_vendor),},
+	{TSP_CMD("get_chip_vendor", get_chip_vendor),},
+	{TSP_CMD("get_chip_name", get_chip_name),},
+	{TSP_CMD("get_x_num", get_x_num),},
+	{TSP_CMD("get_y_num", get_y_num),},
+
+	/* vendor dependant command */
+	{TSP_CMD("run_delta_read", run_delta_read),},
+	{TSP_CMD("get_delta_all_data", get_delta),},
+	{TSP_CMD("run_dnd_read", run_dnd_read),},
+	{TSP_CMD("get_dnd", get_dnd),},
+	{TSP_CMD("run_dnd_v_gap_read", run_dnd_v_gap_read),},
+	{TSP_CMD("get_dnd_v_gap", get_dnd_v_gap),},
+	{TSP_CMD("run_dnd_h_gap_read", run_dnd_h_gap_read),},
+	{TSP_CMD("get_dnd_h_gap", get_dnd_h_gap),},
+	{TSP_CMD("run_hfdnd_read", run_hfdnd_read),},
+	{TSP_CMD("get_hfdnd", get_hfdnd),},
+	{TSP_CMD("clear_reference_data", clear_reference_data),},
+	{TSP_CMD("run_ref_calibration", run_ref_calibration),},
+	{TSP_CMD("dead_zone_enable", dead_zone_enable),},
+	{TSP_CMD("clear_cover_mode", clear_cover_mode),},
+	{TSP_CMD("not_support_cmd", not_support_cmd),},
+};
 #endif /* SEC_FACTORY_TEST */
 
 #define TSP_NORMAL_EVENT_MSG 1
@@ -587,29 +455,14 @@ struct tsp_callbacks {
 	void (*inform_charger)(struct tsp_callbacks *tsp_cb, bool mode);
 };
 
+#define COVER_OPEN 0
+#define COVER_CLOSED 3
 static bool g_ta_connected =0;
-#ifdef CONFIG_SECURE_TOUCH
-#define SECURE_TOUCH_ENABLED	1
-#define SECURE_TOUCH_DISABLED	0
-static bool old_ta_status;
+#ifdef SEC_FACTORY_TEST
+static int g_cover_state;
 #endif
-
-typedef union {
-	u16 optional_mode;
-	struct select_mode {
-		u8 flag;
-		u8 cover_type;
-	} select_mode;
-} zt7538_setting;
-
-zt7538_setting m_optional_mode;
-zt7538_setting m_prev_optional_mode;
-
-struct zt7538_lpm_setting {
-	u8 flag;
-	u8 data;
-};
-struct zt7538_lpm_setting lpm_mode_reg;
+static u16 m_optional_mode = 0;
+static u16 m_prev_optional_mode = 0;
 
 #if ESD_TIMER_INTERVAL
 static struct workqueue_struct *esd_tmr_workqueue;
@@ -667,16 +520,6 @@ struct capa_info {
 	u16	N_cnt;
 	u16	u_cnt;
 	u16	is_zmt200;
-#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-	u16 sx_amp_v_sel;
-	u16 sx_sub_v_sel;
-	u16 sy_amp_v_sel;
-	u16 sy_sub_v_sel;
-#endif
-#ifdef PAT_CONTROL
-	u8	cal_count;
-	u16	tune_fix_ver;
-#endif
 };
 
 enum work_state {
@@ -693,8 +536,6 @@ enum work_state {
 	HW_CALIBRAION,
 	RAW_DATA,
 	PROBE,
-	SLEEP_MODE_IN,
-	SLEEP_MODE_OUT,
 };
 
 enum {
@@ -725,7 +566,6 @@ struct bt532_ts_info {
 	u8								work_state;
 	struct semaphore				work_lock;
 	u8 finger_cnt1;
-	unsigned int move_count[MAX_SUPPORTED_FINGER_NUM];
 	struct mutex					set_reg_lock;
 
 	/*u16								debug_reg[8];*/ /* for debug */
@@ -750,9 +590,7 @@ struct bt532_ts_info {
 	struct tsp_factory_info			*factory_info;
 	struct tsp_raw_data				*raw_data;
 #endif
-#ifdef PAT_CONTROL
-	struct ts_test_result	test_result;
-#endif
+
 	s16 Gap_max_x;
 	s16 Gap_max_y;
 	s16 Gap_max_val;
@@ -764,36 +602,13 @@ struct bt532_ts_info {
 #ifdef CONFIG_INPUT_BOOSTER
 	u8 touch_pressed_num;
 #endif
+#ifdef USE_PIN_CTRL
 	struct pinctrl *pinctrl;
-	bool tsp_pwr_enabled;
-	
-#ifdef CONFIG_SECURE_TOUCH
-	atomic_t secure_enabled;
-	atomic_t secure_pending_irqs;
-	struct completion secure_powerdown;
-	struct completion secure_interrupt;
-	struct clk *core_clk;
-	struct clk *iface_clk;
 #endif
-
+	bool tsp_pwr_enabled;
 #ifdef CONFIG_VBUS_NOTIFIER
 	struct notifier_block vbus_nb;
 #endif
-	u8 cover_type;
-	bool	flip_enable;
-	bool spay_enable;
-	bool aod_enable;
-	bool sleep_mode;
-	unsigned int scrub_id;
-	unsigned int scrub_x;
-	unsigned int scrub_y;
-
-	u8 ito_test[4];
-	u8 check_multi;
-	unsigned int multi_count;
-	unsigned int wet_count;
-	unsigned int dive_count;
-	unsigned int comm_err_count;	
 };
 /* Dummy touchkey code */
 #define KEY_DUMMY_HOME1	249
@@ -811,29 +626,12 @@ u32 BUTTON_MAPPING_KEY[MAX_SUPPORTED_BUTTON_NUM] = {
 	/*KEY_DUMMY_HOME2,*/ KEY_BACK, KEY_DUMMY_BACK};
 #endif
 
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-struct bt532_ts_info *tui_tsp_info;
-extern int tui_force_close(uint32_t arg);
-#endif
-
-struct bt532_ts_info *misc_info;
-
 /* define i2c sub functions*/
 static inline s32 read_data(struct i2c_client *client,
 	u16 reg, u8 *values, u16 length)
 {
-	struct bt532_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
 	int count = 0;
-
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI	
-	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
-		input_err(true, &client->dev,
-				"%s TSP no accessible from Linux, TUI is enabled!\n", __func__);
-		return -EIO;	
-	}
-#endif
-
 retry:
 	/* select register*/
 	ret = i2c_master_send(client , (u8 *)&reg , 2);
@@ -848,56 +646,19 @@ retry:
 	/* for setup tx transaction. */
 	usleep_range(DELAY_FOR_TRANSCATION, DELAY_FOR_TRANSCATION);
 	ret = i2c_master_recv(client , values , length);
-	if (ret < 0){
-		info->comm_err_count++;
+	if (ret < 0)
 		return ret;
-	}
 
 	usleep_range(DELAY_FOR_POST_TRANSCATION, DELAY_FOR_POST_TRANSCATION);
 	return length;
 }
 
-#ifdef PAT_CONTROL
-#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
-static s32 read_data_only(struct i2c_client *client, u8 *values, u16 length)
-{
-	struct bt532_ts_info *info = i2c_get_clientdata(client);
-	s32 ret;
-	int count = 0;
-
-retry:
-	ret = i2c_master_recv(client, values, length);
-	if (ret < 0) {
-		dev_err(&client->dev, "%s: failed to recv. ret:%d, try:%d\n",
-							__func__, ret, count + 1);
-		usleep_range(1 * 1000, 1 * 1000);
-		if (++count < 8)
-			goto retry;
-
-		info->comm_err_count++;
-		return ret;
-	}
-	usleep_range(DELAY_FOR_TRANSCATION, DELAY_FOR_TRANSCATION);
-	return length;
-}
-#endif
-#endif
-
 static inline s32 write_data(struct i2c_client *client,
 	u16 reg, u8 *values, u16 length)
 {
-	struct bt532_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
 	int count = 0;
-	u8 pkt[66]; /* max packet */
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI	
-		if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
-			input_err(true, &client->dev,
-					"%s TSP no accessible from Linux, TUI is enabled!\n", __func__);
-			return -EIO;	
-		}
-#endif
-
+	u8 pkt[10]; /* max packet */
 	pkt[0] = (reg) & 0xff; /* reg addr */
 	pkt[1] = (reg >> 8)&0xff;
 	memcpy((u8 *)&pkt[2], values, length);
@@ -910,7 +671,6 @@ retry:
 		if (++count < 8)
 			goto retry;
 
-		info->comm_err_count++;
 		return ret;
 	}
 
@@ -928,17 +688,8 @@ static inline s32 write_reg(struct i2c_client *client, u16 reg, u16 value)
 
 static inline s32 write_cmd(struct i2c_client *client, u16 reg)
 {
-	struct bt532_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
 	int count = 0;
-
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI	
-		if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
-			input_err(true, &client->dev,
-					"%s TSP no accessible from Linux, TUI is enabled!\n", __func__);
-			return -EIO;	
-		}
-#endif
 
 retry:
 	ret = i2c_master_send(client , (u8 *)&reg , 2);
@@ -948,7 +699,6 @@ retry:
 		if (++count < 8)
 			goto retry;
 
-		info->comm_err_count++;
 		return ret;
 	}
 
@@ -959,17 +709,8 @@ retry:
 static inline s32 read_raw_data(struct i2c_client *client,
 		u16 reg, u8 *values, u16 length)
 {
-	struct bt532_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
 	int count = 0;
-
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI	
-		if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
-			input_err(true, &client->dev,
-					"%s TSP no accessible from Linux, TUI is enabled!\n", __func__);
-			return -EIO;	
-		}
-#endif
 
 retry:
 	/* select register */
@@ -980,7 +721,6 @@ retry:
 		if (++count < 8)
 			goto retry;
 
-		info->comm_err_count++;
 		return ret;
 	}
 
@@ -988,10 +728,8 @@ retry:
 	usleep_range(200, 200);
 
 	ret = i2c_master_recv(client , values , length);
-	if (ret < 0){
-		info->comm_err_count++;
+	if (ret < 0)
 		return ret;
-	}
 
 	usleep_range(DELAY_FOR_POST_TRANSCATION, DELAY_FOR_POST_TRANSCATION);
 	return length;
@@ -1000,304 +738,23 @@ retry:
 static inline s32 read_firmware_data(struct i2c_client *client,
 	u16 addr, u8 *values, u16 length)
 {
-	struct bt532_ts_info *info = i2c_get_clientdata(client);
 	s32 ret;
-
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
-		input_err(true, &client->dev,
-				"%s TSP no accessible from Linux, TUI is enabled!\n", __func__);
-		return -EIO;	
-	}
-#endif
-
 	/* select register*/
+
 	ret = i2c_master_send(client , (u8 *)&addr , 2);
-	if (ret < 0){
-		info->comm_err_count++;
+	if (ret < 0)
 		return ret;
-	}
 
 	/* for setup tx transaction. */
 	usleep_range(1 * 1000, 1 * 1000);
 
 	ret = i2c_master_recv(client , values , length);
-	if (ret < 0){
-		info->comm_err_count++;
+	if (ret < 0)
 		return ret;
-	}
 
 	usleep_range(DELAY_FOR_POST_TRANSCATION, DELAY_FOR_POST_TRANSCATION);
 	return length;
 }
-
-#ifdef CONFIG_SECURE_TOUCH
-static irqreturn_t bt532_touch_work(int irq, void *data);
-static void clear_report_data(struct bt532_ts_info *info);
-static void esd_timer_stop(struct bt532_ts_info *info);
-static void esd_timer_start(u16 sec, struct bt532_ts_info *info);
-static void bt532_set_ta_status(struct bt532_ts_info *info);
-
-
-/**
- * Sysfs attr group for secure touch & interrupt handler for Secure world.
- * @atomic : syncronization for secure_enabled
- * @pm_runtime : set rpm_resume or rpm_idle
- */
-
-static void secure_touch_notify(struct bt532_ts_info *info)
-{
-	dev_dbg(&info->client->dev, "%s\n", __func__);
-	sysfs_notify(&info->input_dev->dev.kobj, NULL, "secure_touch");
-}
-
-static irqreturn_t secure_filter_interrupt(struct bt532_ts_info *info)
-{
-	if (atomic_read(&info->secure_enabled) == SECURE_TOUCH_ENABLED) {
-		if (atomic_cmpxchg(&info->secure_pending_irqs, 0, 1) == 0) {
-			dev_dbg(&info->client->dev, "%s: pending irq:%d\n",
-					__func__, (int)atomic_read(&info->secure_pending_irqs));
-
-			secure_touch_notify(info);
-		} else {
-			dev_info(&info->client->dev, "%s --\n", __func__);
-		}
-
-		return IRQ_HANDLED;
-	}
-
-	return IRQ_NONE;
-}
-
-static int secure_touch_clk_prepare_enable(struct bt532_ts_info *info)
-{
-	int ret;
-
-	if (!info->core_clk || !info->iface_clk) {
-		dev_err(&info->client->dev, "%s: error clk\n", __func__);
-		return -ENODEV;
-	}
-
-	ret = clk_prepare_enable(info->core_clk);
-	if (ret < 0) {
-		dev_err(&info->client->dev, "%s: failed core clk\n", __func__);
-		goto err_core_clk;
-	}
-
-	ret = clk_prepare_enable(info->iface_clk);
-	if (ret < 0) {
-		dev_err(&info->client->dev, "%s: failed iface clk\n", __func__);
-		goto err_iface_clk;
-	}
-
-	return 0;
-
-err_iface_clk:
-	clk_disable_unprepare(info->core_clk);
-err_core_clk:
-	return -ENODEV;
-}
-
-static void secure_touch_clk_unprepare_diable(struct bt532_ts_info *info)
-{
-
-	if (!info->core_clk || !info->iface_clk) {
-		dev_err(&info->client->dev, "%s: error clk\n", __func__);
-		return;
-	}
-
-	clk_disable_unprepare(info->core_clk);
-	clk_disable_unprepare(info->iface_clk);
-}
-
-static ssize_t secure_touch_enable_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-
-	return snprintf(buf, PAGE_SIZE, "%d", atomic_read(&info->secure_enabled));
-}
-
-static ssize_t secure_touch_enable_store(struct device *dev,
-				struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-	int data, ret;
-
-	ret = sscanf(buf, "%d", &data);
-	if (ret < 0) {
-		dev_err(&info->client->dev, "%s: failed to read\n", __func__);
-		return -EINVAL;
-	}
-
-	dev_info(&info->client->dev, "%s: %d\n", __func__, data);
-
-	if (data == 1) {
-		/* Enable Secure Mode */
-		if (atomic_read(&info->secure_enabled) == SECURE_TOUCH_ENABLED) {
-			dev_err(&info->client->dev, "%s: already enabled\n", __func__);
-			return -EBUSY;
-		}
-
-		down(&info->work_lock);
-		synchronize_irq(info->client->irq);
-		clear_report_data(info);
-
-		/* zinitix timer stop */
-		write_reg(misc_info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0);
-		esd_timer_stop(info);
-
-		if (pm_runtime_get(info->client->adapter->dev.parent) < 0) {
-			esd_timer_start(CHECK_ESD_TIMER, info);
-			write_reg(misc_info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, SCAN_RATE_HZ * ESD_TIMER_INTERVAL);
-			dev_err(&info->client->dev, "%s: failed to get pm_runtime\n", __func__);
-			up(&info->work_lock);
-			return -EIO;
-		}
-
-		if (secure_touch_clk_prepare_enable(info) < 0) {
-			pm_runtime_put(info->client->adapter->dev.parent);
-			esd_timer_start(CHECK_ESD_TIMER, info);
-			write_reg(misc_info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, SCAN_RATE_HZ * ESD_TIMER_INTERVAL);
-			dev_err(&info->client->dev, "%s: failed to clk enable\n", __func__);
-			up(&info->work_lock);
-			return -ENXIO;
-		}
-
-		init_completion(&info->secure_powerdown);
-		init_completion(&info->secure_interrupt);
-
-		msleep(10);
-
-		atomic_set(&info->secure_enabled, 1);
-		atomic_set(&info->secure_pending_irqs, 0);
-
-		dev_err(&info->client->dev, "%s: clk enable\n", __func__);
-		up(&info->work_lock);
-
-	} else if (data == 0) {
-
-		/* Disable Secure Mode */
-		if (atomic_read(&info->secure_enabled) == SECURE_TOUCH_DISABLED) {
-			dev_err(&info->client->dev, "%s: already disabled\n", __func__);
-			return count;
-		}
-
-		secure_touch_clk_unprepare_diable(info);
-		pm_runtime_put(info->client->adapter->dev.parent);
-		atomic_set(&info->secure_enabled, 0);
-		secure_touch_notify(info);
-		msleep(10);
-
-		clear_report_data(info);
-		bt532_touch_work(info->client->irq, info);
-		complete(&info->secure_powerdown);
-		complete(&info->secure_interrupt);
-
-		if (old_ta_status != g_ta_connected) {
-			bt532_set_ta_status(misc_info);
-		}
-
-		/* zinitix timer start */
-		esd_timer_start(CHECK_ESD_TIMER, info);
-		write_reg(misc_info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, SCAN_RATE_HZ * ESD_TIMER_INTERVAL);
-		dev_err(&info->client->dev, "%s: clk disable\n", __func__);
-
-	} else {
-		dev_err(&info->client->dev, "%s: unsupported value, %d\n", __func__, data);
-		return -EINVAL;
-	}
-
-	dev_err(&info->client->dev, "%s done\n", __func__);
-
-	return count;
-}
-
-static ssize_t secure_touch_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-
-	if (atomic_read(&info->secure_enabled) == SECURE_TOUCH_DISABLED) {
-		dev_err(&info->client->dev, "%s: disable\n", __func__);
-		goto secure_touch_out;
-	}
-
-	if (atomic_cmpxchg(&info->secure_pending_irqs, -1, 0) == -1) {
-		dev_err(&info->client->dev, "%s: secure_pending_irqs -1\n", __func__);
-		goto secure_touch_out;
-
-	}
-
-	if (atomic_cmpxchg(&info->secure_pending_irqs, 1, 0) != 1) {
-		dev_err(&info->client->dev, "%s: secure_pending_irqs != 1\n", __func__);
-		goto secure_touch_out;
-
-	}
-
-	complete(&info->secure_interrupt);
-
-	return snprintf(buf, PAGE_SIZE, "1");
-
-secure_touch_out:
-	return snprintf(buf, PAGE_SIZE, "0");
-}
-
-static struct device_attribute secure_attrs[] = {
-	__ATTR(secure_touch_enable, (S_IRUGO | S_IWUSR | S_IWGRP),
-				secure_touch_enable_show,
-				secure_touch_enable_store),
-	__ATTR(secure_touch, S_IRUGO,
-				secure_touch_show,
-				NULL),
-};
-
-static int secure_touch_init(struct bt532_ts_info *info)
-{
-	dev_info(&info->client->dev, "%s\n", __func__);
-
-	init_completion(&info->secure_powerdown);
-	init_completion(&info->secure_interrupt);
-
-	info->core_clk = clk_get(&info->client->dev, "core_clk");
-	if (IS_ERR_OR_NULL(info->core_clk)) {
-		dev_err(&info->client->dev, "%s: failed to get core_clk: %ld\n",
-				__func__, PTR_ERR(info->core_clk));
-		goto err_core_clk;
-	}
-
-	info->iface_clk = clk_get(&info->client->dev, "iface_clk");
-	if (IS_ERR_OR_NULL(info->iface_clk)) {
-		dev_err(&info->client->dev, "%s: failed to get iface_clk: %ld\n",
-				__func__, PTR_ERR(info->iface_clk));
-		goto err_iface_clk;
-	}
-
-	return 0;
-
-err_iface_clk:
-	clk_put(info->core_clk);
-err_core_clk:
-	info->core_clk = NULL;
-	info->iface_clk = NULL;
-
-	return -ENODEV;
-}
-
-static void secure_touch_stop(struct bt532_ts_info *info, bool stop)
-{
-	dev_info(&info->client->dev, "%s, %d\n", __func__, stop);
-
-	if (atomic_read(&info->secure_enabled)) {
-		atomic_set(&info->secure_pending_irqs, -1);
-		secure_touch_notify(info);
-
-		if (stop)
-			wait_for_completion_interruptible(&info->secure_powerdown);
-	}
-}
-#endif
-
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 static void bt532_ts_early_suspend(struct early_suspend *h);
@@ -1310,7 +767,9 @@ static void bt532_ts_close(struct input_dev *dev);
 #endif
 
 static bool bt532_power_control(struct bt532_ts_info *info, u8 ctl);
+#ifdef USE_PIN_CTRL
 static int bt532_pinctrl_configure(struct bt532_ts_info *info, bool active);
+#endif
 
 static bool init_touch(struct bt532_ts_info *info);
 static bool mini_init_touch(struct bt532_ts_info *info);
@@ -1320,11 +779,6 @@ static void esd_timer_start(u16 sec, struct bt532_ts_info *info);
 static void esd_timer_stop(struct bt532_ts_info *info);
 static void esd_timer_init(struct bt532_ts_info *info);
 static void esd_timeout_handler(unsigned long data);
-#endif
-
-#ifdef PAT_CONTROL
-int get_tsp_nvm_data(struct bt532_ts_info *info, u8 addr, u8 *values, u16 length);
-void set_tsp_nvm_data(struct bt532_ts_info *info, u8 addr, u8 *values, u16 length);
 #endif
 
 #ifdef USE_MISC_DEVICE
@@ -1337,8 +791,7 @@ static const struct file_operations ts_misc_fops = {
 	.owner = THIS_MODULE,
 	.open = ts_misc_fops_open,
 	.release = ts_misc_fops_close,
-	//.unlocked_ioctl = ts_misc_fops_ioctl,
-	.compat_ioctl = ts_misc_fops_ioctl,
+	.unlocked_ioctl = ts_misc_fops_ioctl,
 };
 
 static struct miscdevice touch_misc_device = {
@@ -1372,48 +825,17 @@ static struct miscdevice touch_misc_device = {
 
 struct bt532_ts_info *misc_info;
 
-static void set_cover_type(struct bt532_ts_info *info, bool enable)
-{
-	struct i2c_client *client = info->client;
-
-	write_cmd(info->client, 0x0A);
-	if(enable){
-		switch (info->cover_type) {
-			case ZT_FLIP_WALLET:
-				write_reg(client, BT532_COVER_CONTROL_REG, WALLET_COVER_CLOSE);
-				break;
-			case ZT_VIEW_COVER:
-				write_reg(client, BT532_COVER_CONTROL_REG, VIEW_COVER_CLOSE);
-				break;
-			case ZT_CLEAR_FLIP_COVER:
-				write_reg(client, BT532_COVER_CONTROL_REG, CLEAR_COVER_CLOSE);
-				break;
-			case ZT_NEON_COVER:
-				write_reg(client, BT532_COVER_CONTROL_REG, LED_COVER_CLOSE);
-				break;				
-			default:
-				input_err(true, &info->client->dev, "%s: touch is not supported for %d cover\n",
-							__func__, info->cover_type);
-		}
-	}
-	else
-		write_reg(client, BT532_COVER_CONTROL_REG, COVER_OPEN);
-
-	write_cmd(info->client, 0x0B);
-	input_info(true, &info->client->dev, "%s: type %d enable %d\n", __func__, info->cover_type, enable);
-}
-
 static void bt532_set_optional_mode(struct bt532_ts_info *info, bool force)
 {
 	u16	reg_val;
 
-	if (m_prev_optional_mode.optional_mode == m_optional_mode.optional_mode && !force)
+	if(m_prev_optional_mode == m_optional_mode && !force)
 		return;
 	mutex_lock(&info->set_reg_lock);
-	reg_val = m_optional_mode.optional_mode;
+	reg_val = m_optional_mode;
 	mutex_unlock(&info->set_reg_lock);
 	if (write_reg(info->client, BT532_OPTIONAL_SETTING, reg_val) == I2C_SUCCESS) {
-		m_prev_optional_mode.optional_mode = reg_val;
+		m_prev_optional_mode = reg_val;
 	}
 }
 #ifdef SEC_FACTORY_TEST
@@ -1429,7 +851,7 @@ static bool get_raw_data(struct bt532_ts_info *info, u8 *buff, int skip_cnt)
 
 	down(&info->work_lock);
 	if (info->work_state != NOTHING) {
-		input_info(true, &client->dev, "other process occupied.. (%d)\n",
+		tsp_debug_info(true, &client->dev, "other process occupied.. (%d)\n",
 			info->work_state);
 		enable_irq(info->irq);
 		up(&info->work_lock);
@@ -1475,7 +897,7 @@ static bool ts_get_raw_data(struct bt532_ts_info *info)
 	u32 sz;
 
 	if (down_trylock(&info->raw_data_lock)) {
-		input_err(true, &client->dev, "Failed to occupy sema\n");
+		tsp_debug_err(true, &client->dev, "Failed to occupy sema\n");
 		info->touch_info.status = 0;
 		return true;
 	}
@@ -1484,7 +906,7 @@ static bool ts_get_raw_data(struct bt532_ts_info *info)
 
 	if (read_raw_data(info->client, BT532_RAWDATA_REG,
 			(char *)info->cur_data, sz) < 0) {
-		input_err(true, &client->dev, "Failed to read raw data\n");
+		tsp_debug_err(true, &client->dev, "Failed to read raw data\n");
 		up(&info->raw_data_lock);
 		return false;
 	}
@@ -1501,9 +923,9 @@ static bool ts_get_raw_data(struct bt532_ts_info *info)
 static bool ts_read_coord(struct bt532_ts_info *info)
 {
 	struct i2c_client *client = info->client;
-	int retry_cnt;
-	u16* u16_point_info;
+#if (TOUCH_POINT_MODE == 1)
 	int i;
+#endif
 
 	/* zinitix_debug_msg("ts_read_coord+\r\n"); */
 
@@ -1513,7 +935,7 @@ static bool ts_read_coord(struct bt532_ts_info *info)
 		if (ts_get_raw_data(info) == false)
 			return false;
 
-		input_err(true, &client->dev, "status = 0x%04X\n", info->touch_info.status);
+		tsp_debug_err(true, &client->dev, "status = 0x%04X\n", info->touch_info.status);
 
 		goto out;
 	}
@@ -1524,12 +946,12 @@ static bool ts_read_coord(struct bt532_ts_info *info)
 
 	if (read_data(info->client, BT532_POINT_STATUS_REG,
 			(u8 *)(&info->touch_info), 4) < 0) {
-		input_err(true, &client->dev, "%s: Failed to read point info\n", __func__);
+		tsp_debug_err(true, &client->dev, "%s: Failed to read point info\n", __func__);
 
 		return false;
 	}
 
-	input_info(true, &client->dev, "status reg = 0x%x , event_flag = 0x%04x\n",
+	tsp_debug_info(true, &client->dev, "status reg = 0x%x , event_flag = 0x%04x\n",
 				info->touch_info.status, info->touch_info.event_flag);
 
 	if (info->touch_info.event_flag == 0)
@@ -1542,7 +964,7 @@ static bool ts_read_coord(struct bt532_ts_info *info)
 			if (read_data(info->client, BT532_POINT_STATUS_REG + 2 + ( i * 4),
 					(u8 *)(&info->touch_info.coord[i]),
 					sizeof(struct coord)) < 0) {
-				input_err(true, &client->dev, "Failed to read point info\n");
+				tsp_debug_err(true, &client->dev, "Failed to read point info\n");
 
 				return false;
 			}
@@ -1550,83 +972,24 @@ static bool ts_read_coord(struct bt532_ts_info *info)
 	}
 
 #else
-	u16_point_info = &(info->touch_info.status);
-	retry_cnt = 0;
-	while(retry_cnt < 10) {
-		if (read_data(info->client, BT532_POINT_STATUS_REG,
-				(u8 *)(&info->touch_info), sizeof(struct point_info)) < 0) {
-			input_err(true, &client->dev, "Failed to read point info, retry_cnt = %d\n", ++retry_cnt);
-			continue;
-		}
+	if (read_data(info->client, BT532_POINT_STATUS_REG,
+			(u8 *)(&info->touch_info), sizeof(struct point_info)) < 0) {
+		tsp_debug_err(true, &client->dev, "Failed to read point info\n");
 
-		if(zinitix_bit_test(info->touch_info.status, BIT_MUST_ZERO) || info->touch_info.status == 0x1 ) {
-			input_err(true, &client->dev, "abnormal point info read, retry_cnt = %d\n", ++retry_cnt);
-			continue;
-		}
-
-		for(i = 0 ; i < sizeof(struct point_info)/2 ; i++) {
-			if(*(u16_point_info+i) == 0xffff) {
-				input_err(true, &client->dev, "point info 0xffff, retry_cnt = %d\n", ++retry_cnt);
-				info->touch_info.status = 0xffff;
-				break;
-			}
-		}
-		if(info->touch_info.status != 0xffff)
-			break;
-
-		retry_cnt++;
-		continue;
-	}
-
-	if(retry_cnt >= 10)
 		return false;
-#endif
-
-	/* LPM mode : Spay, AOT */
-	if((info->pdata->support_lpm_mode)&&(zinitix_bit_test(info->touch_info.status, BIT_GESTURE))){
-		if (read_data(info->client, ZT75XX_LPM_MODE_REG, (u8 *)&lpm_mode_reg, 2) < 0)
-			input_info(true, &client->dev, "%s: lpm_mode_reg read fail\n", __func__);
-		input_info(true, &client->dev, "lpm_mode_reg read  0x%02x%02x \n", lpm_mode_reg.data, lpm_mode_reg.flag);
-
-		if (zinitix_bit_test(lpm_mode_reg.data, BIT_EVENT_SPAY)) {
-			input_info(true, &client->dev, "Spay Gesture\n");
-
-			info->scrub_id = SPONGE_EVENT_TYPE_SPAY;
-			info->scrub_x = 0;
-			info->scrub_y = 0;
-
-			input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 1);
-			input_sync(info->input_dev);
-			input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 0);
-			input_sync(info->input_dev);
-		}else if (zinitix_bit_test(lpm_mode_reg.data, BIT_EVENT_AOD)) {
-			input_info(true, &client->dev, "AOT Doubletab\n");
-
-			info->scrub_id = SPONGE_EVENT_TYPE_AOD_DOUBLETAB;
-			if (read_data(info->client, ZT75XX_GET_AOD_X_REG, (u8 *)&info->scrub_x, 2) < 0)
-				input_info(true, &client->dev, "aod_x_reg read fail\n");
-			if (read_data(info->client, ZT75XX_GET_AOD_Y_REG, (u8 *)&info->scrub_y, 2) < 0)
-				input_info(true, &client->dev, "aod_y_reg read fail\n");
-
-			input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 1);
-			input_sync(info->input_dev);
-			input_report_key(info->input_dev, KEY_BLACK_UI_GESTURE, 0);
-			input_sync(info->input_dev);
-		}
 	}
+#endif
 
 	bt532_set_optional_mode(info, false);
 out:
 	/* error */
-#if (TOUCH_POINT_MODE == 1)
 	if (zinitix_bit_test(info->touch_info.status, BIT_MUST_ZERO)) {
-		input_err(true, &client->dev, "Invalid must zero bit(%04x)\n",
+		tsp_debug_err(true, &client->dev, "Invalid must zero bit(%04x)\n",
 			info->touch_info.status);
 		/*write_cmd(info->client, BT532_CLEAR_INT_STATUS_CMD);
 		udelay(DELAY_FOR_SIGNAL_DELAY);*/
 		return false;
 	}
-#endif
 /*
 	if (zinitix_bit_test(info->touch_info.status, BIT_ICON_EVENT)) {
 		udelay(20);
@@ -1649,17 +1012,6 @@ static void esd_timeout_handler(unsigned long data)
 {
 	struct bt532_ts_info *info = (struct bt532_ts_info *)data;
 
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-	struct i2c_client *client = info->client;
-	if (TRUSTEDUI_MODE_INPUT_SECURED & trustedui_get_current_mode()) {
-		input_err(true, &client->dev,
-				"%s TSP no accessible from Linux, TUI is enabled!\n", __func__);
-		//esd_timer_start(CHECK_ESD_TIMER, info);
-		esd_timer_stop(info);
-		return;
-	}
-#endif
-	
 	info->p_esd_timeout_tmr = NULL;
 	queue_work(esd_tmr_workqueue, &info->tmr_work);
 }
@@ -1667,12 +1019,6 @@ static void esd_timeout_handler(unsigned long data)
 static void esd_timer_start(u16 sec, struct bt532_ts_info *info)
 {
 	unsigned long flags;
-
-	if(info->sleep_mode){
-		input_info(true, &info->client->dev, "%s skip (sleep_mode)!\n", __func__);
-		return;
-	}
-
 	spin_lock_irqsave(&info->lock, flags);
 	if (info->p_esd_timeout_tmr != NULL)
 #ifdef CONFIG_SMP
@@ -1723,32 +1069,23 @@ static void ts_tmr_work(struct work_struct *work)
 	struct i2c_client *client = info->client;
 
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "tmr queue work ++\n");
+	tsp_debug_info(true, &client->dev, "tmr queue work ++\n");
 #endif
 
 	if(down_trylock(&info->work_lock)) {
-		input_err(true, &client->dev, "%s: Failed to occupy work lock\n", __func__);
+		tsp_debug_err(true, &client->dev, "%s: Failed to occupy work lock\n", __func__);
 		esd_timer_start(CHECK_ESD_TIMER, info);
 
 		return;
 	}
 
 	if (info->work_state != NOTHING) {
-		input_info(true, &client->dev, "%s: Other process occupied (%d)\n",
+		tsp_debug_info(true, &client->dev, "%s: Other process occupied (%d)\n",
 			__func__, info->work_state);
 		up(&info->work_lock);
 
 		return;
 	}
-
-#ifdef CONFIG_SECURE_TOUCH
-	if (atomic_read(&info->secure_enabled) == SECURE_TOUCH_ENABLED) {
-		dev_err(&client->dev, "%s: ignored, because touch is in secure mode\n", __func__);
-		up(&info->work_lock);
-		return;
-	}
-#endif
-
 	info->work_state = ESD_TIMER;
 
 	disable_irq(info->irq);
@@ -1763,12 +1100,12 @@ static void ts_tmr_work(struct work_struct *work)
 	enable_irq(info->irq);
 	up(&info->work_lock);
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "tmr queue work--\n");
+	tsp_debug_info(true, &client->dev, "tmr queue work--\n");
 #endif
 
 	return;
 fail_time_out_init:
-	input_err(true, &client->dev, "%s: Failed to restart\n", __func__);
+	tsp_debug_err(true, &client->dev, "%s: Failed to restart\n", __func__);
 	esd_timer_start(CHECK_ESD_TIMER, info);
 	info->work_state = NOTHING;
 	enable_irq(info->irq);
@@ -1788,44 +1125,40 @@ static bool bt532_power_sequence(struct bt532_ts_info *info)
 
 retry_power_sequence:
 	if (write_reg(client, 0xc000, 0x0001) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "Failed to send power sequence(vendor cmd enable)\n");
+		tsp_debug_err(true, &client->dev, "Failed to send power sequence(vendor cmd enable)\n");
 		goto fail_power_sequence;
 	}
 	usleep_range(10, 10);
 
 	if (read_data(client, 0xcc00, (u8 *)&chip_code, 2) < 0) {
-		input_err(true, &client->dev, "Failed to read chip code\n");
+		tsp_debug_err(true, &client->dev, "Failed to read chip code\n");
 		goto fail_power_sequence;
 	}
 
-	input_info(true, &client->dev, "%s: chip code = 0x%x\n", __func__, chip_code);
+	tsp_debug_info(true, &client->dev, "%s: chip code = 0x%x\n", __func__, chip_code);
 	usleep_range(10, 10);
 
 	if(chip_code == ZT7554_CHIP_CODE)
 		info->cap_info.ic_fw_size = 64*1024;
 	else if(chip_code == ZT7548_CHIP_CODE)
 		info->cap_info.ic_fw_size = 48*1024;
-	else if(chip_code == ZT7538_CHIP_CODE)
-		info->cap_info.ic_fw_size = 44*1024;
 	else if(chip_code == BT43X_CHIP_CODE)
 		info->cap_info.ic_fw_size = 24*1024;
-	else if(chip_code == BT53X_CHIP_CODE)
-		info->cap_info.ic_fw_size = 32*1024;
 
 	if (write_cmd(client, 0xc004) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "Failed to send power sequence(intn clear)\n");
+		tsp_debug_err(true, &client->dev, "Failed to send power sequence(intn clear)\n");
 		goto fail_power_sequence;
 	}
 	usleep_range(10, 10);
 
 	if (write_reg(client, 0xc002, 0x0001) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "Failed to send power sequence(nvm init)\n");
+		tsp_debug_err(true, &client->dev, "Failed to send power sequence(nvm init)\n");
 		goto fail_power_sequence;
 	}
 	usleep_range(2 * 1000, 2 * 1000);
 
 	if (write_reg(client, 0xc001, 0x0001) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "Failed to send power sequence(program start)\n");
+		tsp_debug_err(true, &client->dev, "Failed to send power sequence(program start)\n");
 		goto fail_power_sequence;
 	}
 
@@ -1835,7 +1168,7 @@ retry_power_sequence:
 
 fail_power_sequence:
 	if (retry++ < 3) {
-		input_info(true, &client->dev, "retry = %d\n", retry);
+		tsp_debug_info(true, &client->dev, "retry = %d\n", retry);
 
 		msleep(CHIP_ON_DELAY);
 		goto retry_power_sequence;
@@ -1850,13 +1183,15 @@ static bool bt532_power_control(struct bt532_ts_info *info, u8 ctl)
 
 	int ret = 0;
 
-	input_info(true, &client->dev, "[TSP] %s, %d\n", __func__, ctl);
+	tsp_debug_info(true, &client->dev, "[TSP] %s, %d\n", __func__, ctl);
 
 	ret = info->pdata->tsp_power(info, ctl);
 	if (ret)
 		return false;
 
+#ifdef USE_PIN_CTRL
 	bt532_pinctrl_configure(info, ctl);
+#endif
 
 	if (ctl == POWER_ON_SEQUENCE) {
 		msleep(CHIP_ON_DELAY);
@@ -1874,16 +1209,16 @@ static bool bt532_power_control(struct bt532_ts_info *info, u8 ctl)
 
 static void bt532_set_ta_status(struct bt532_ts_info *info)
 {
-	input_info(true, &info->client->dev, "%s g_ta_connected %d", __func__, g_ta_connected);
+	tsp_debug_info(true, &info->client->dev, "%s g_ta_connected %d", __func__, g_ta_connected);
 
 	if (g_ta_connected) {
 		mutex_lock(&info->set_reg_lock);
-		zinitix_bit_set(m_optional_mode.select_mode.flag, DEF_OPTIONAL_MODE_USB_DETECT_BIT);
+		zinitix_bit_set(m_optional_mode, DEF_OPTIONAL_MODE_USB_DETECT_BIT);
 		mutex_unlock(&info->set_reg_lock);
 	}
 	else {
 		mutex_lock(&info->set_reg_lock);
-		zinitix_bit_clr(m_optional_mode.select_mode.flag, DEF_OPTIONAL_MODE_USB_DETECT_BIT);
+		zinitix_bit_clr(m_optional_mode, DEF_OPTIONAL_MODE_USB_DETECT_BIT);
 		mutex_unlock(&info->set_reg_lock);
 	}
 }
@@ -1895,30 +1230,20 @@ int tsp_vbus_notification(struct notifier_block *nb,
 	struct bt532_ts_info *info = container_of(nb, struct bt532_ts_info, vbus_nb);
 	vbus_status_t vbus_type = *(vbus_status_t *)data;
 
-	input_info(true, &info->client->dev, "%s cmd=%lu, vbus_type=%d\n", __func__, cmd, vbus_type);
+	tsp_debug_info(true, &info->client->dev, "%s cmd=%lu, vbus_type=%d\n", __func__, cmd, vbus_type);
 
 	switch (vbus_type) {
 	case STATUS_VBUS_HIGH:
-		input_info(true, &info->client->dev, "%s : attach\n",__func__);
+		tsp_debug_info(true, &info->client->dev, "%s : attach\n",__func__);
 		g_ta_connected = true;
 		break;
 	case STATUS_VBUS_LOW:
-		input_info(true, &info->client->dev, "%s : detach\n",__func__);
+		tsp_debug_info(true, &info->client->dev, "%s : detach\n",__func__);
 		g_ta_connected = false;
 		break;
 	default:
 		break;
 	}
-
-#ifdef CONFIG_SECURE_TOUCH
-		if (atomic_read(&misc_info->secure_enabled)) {
-			input_info(true, &info->client->dev, "%s: ignored, because secure mode, old:%d, TA:%d\n", __func__, old_ta_status, g_ta_connected);
-			return 0;
-		}else{
-			old_ta_status = g_ta_connected;
-		}
-#endif
-	
 	bt532_set_ta_status(info);
 	return 0;
 }
@@ -1932,32 +1257,23 @@ static void bt532_charger_status_cb(struct tsp_callbacks *cb, bool ta_status)
 		g_ta_connected = false;
 	else
 		g_ta_connected = true;
-	
-#ifdef CONFIG_SECURE_TOUCH
-			if (atomic_read(&misc_info->secure_enabled)) {
-				input_info(true, &info->client->dev, "%s: ignored, because secure mode, old:%d, TA:%d\n", __func__, old_ta_status, g_ta_connected);
-				return ;
-			}else{
-				old_ta_status = g_ta_connected;
-			}
-#endif
 
 	bt532_set_ta_status(info);
-	input_info(true, &info->client->dev, "TA %s\n", ta_status ? "connected" : "disconnected");
+	tsp_debug_info(true, &info->client->dev, "TA %s\n", ta_status ? "connected" : "disconnected");
 }
 
 static bool crc_check(struct bt532_ts_info *info)
 {
 	u16 chip_check_sum = 0;
 
-	input_info(true, &info->client->dev,"%s: Check checksum\n", __func__);
+	tsp_debug_info(true, &info->client->dev,"%s: Check checksum\n", __func__);
 
 	if (read_data(info->client, BT532_CHECKSUM_RESULT,
 					(u8 *)&chip_check_sum, 2) < 0) {
-		input_err(true, &info->client->dev, "%s: read crc fail", __func__);
+		tsp_debug_err(true, &info->client->dev, "%s: read crc fail", __func__);
 	}
 
-	input_info(true, &info->client->dev, "0x%04X\n", chip_check_sum);
+	tsp_debug_info(true, &info->client->dev, "0x%04X\n", chip_check_sum);
 
 	if(chip_check_sum == 0x55aa)
 		return true;
@@ -1982,17 +1298,17 @@ static bool ts_check_need_upgrade(struct bt532_ts_info *info,
 
 #if CHECK_HWID
 	new_hw_id = (u16) (fw_data[0x7528] | (fw_data[0x7529]<<8));
-	input_info(true, &info->client->dev, "cur HW_ID = 0x%x, new HW_ID = 0x%x\n",
+	tsp_debug_info(true, &info->client->dev, "cur HW_ID = 0x%x, new HW_ID = 0x%x\n",
 							cur_hw_id, new_hw_id);
 	if (cur_hw_id != new_hw_id)
 		return false;
 #endif
 
-	input_info(true, &info->client->dev, "cur version = 0x%x, new version = 0x%x\n",
+	tsp_debug_info(true, &info->client->dev, "cur version = 0x%x, new version = 0x%x\n",
 							cur_version, new_version);
-	input_info(true, &info->client->dev, "cur minor version = 0x%x, new minor version = 0x%x\n",
+	tsp_debug_info(true, &info->client->dev, "cur minor version = 0x%x, new minor version = 0x%x\n",
 						cur_minor_version, new_minor_version);
-	input_info(true, &info->client->dev, "cur reg data version = 0x%x, new reg data version = 0x%x\n",
+	tsp_debug_info(true, &info->client->dev, "cur reg data version = 0x%x, new reg data version = 0x%x\n",
 						cur_reg_version, new_reg_version);
 
 	if (cur_version > 0xFF)
@@ -2013,10 +1329,6 @@ static bool ts_check_need_upgrade(struct bt532_ts_info *info,
 #endif
 
 #define TC_SECTOR_SZ		8
-#ifdef PAT_CONTROL
-#define TC_SECTOR_SZ_WRITE		64
-#define TC_SECTOR_SZ_READ		8
-#endif
 
 #if TOUCH_ONESHOT_UPGRADE || TOUCH_FORCE_UPGRADE \
 	|| defined(SEC_FACTORY_TEST) || defined(USE_MISC_DEVICE)
@@ -2030,9 +1342,6 @@ static u8 ts_upgrade_firmware(struct bt532_ts_info *info,
 	int i;
 	int page_sz = 128;
 	u16 chip_code;
-#ifndef PAT_CONTROL
-	int fuzing_udelay = 8000;
-#endif
 
 	verify_data = kzalloc(size, GFP_KERNEL);
 	if (verify_data == NULL) {
@@ -2059,28 +1368,8 @@ retry_upgrade:
 
 	zinitix_printk("chip code = 0x%x\n", chip_code);
 
-#ifdef PAT_CONTROL
-	if(chip_code == ZT7538_CHIP_CODE || chip_code == ZT7548_CHIP_CODE || chip_code == ZT7532_CHIP_CODE) {
-		flash_addr = (firmware_data[0x61]<<16) | (firmware_data[0x62]<<8) | firmware_data[0x63];
-		flash_addr += ((firmware_data[0x65]<<16) | (firmware_data[0x66]<<8) | firmware_data[0x67]);
-
-		if(flash_addr != 0){
-			size = flash_addr;
-			page_sz = (1<<firmware_data[0x6D]);
-		}
-
-		if (write_reg(client, 0xc201, 0x00be) != I2C_SUCCESS) {
-			zinitix_printk("power sequence error (set clk speed)\n");
-			goto fail_upgrade;
-		}
-		usleep_range(200, 200);
-	}
-	zinitix_printk("f/w size = 0x%x Page_sz = %d \n", size, page_sz);
-	
-#else
-	if((chip_code == ZT7538_CHIP_CODE)||(chip_code == ZT7548_CHIP_CODE)||(chip_code == BT43X_CHIP_CODE))
+	if((chip_code == ZT7548_CHIP_CODE)||(chip_code == BT43X_CHIP_CODE))
 		page_sz = 64;
-#endif
 	usleep_range(10, 10);
 
 	if (write_cmd(client, 0xc004) != I2C_SUCCESS){
@@ -2109,85 +1398,6 @@ retry_upgrade:
 		goto fail_upgrade;
 	}
 
-#ifdef PAT_CONTROL
-	if (write_reg(client, BT532_INIT_FLASH, 2) != I2C_SUCCESS) {
-		zinitix_printk("failed to enter burst upgrade mode\n");
-		goto fail_upgrade;
-	}
-
-	for (flash_addr = 0; flash_addr < size; ) {
-		for (i = 0; i < page_sz/TC_SECTOR_SZ_WRITE; i++) {
-			if (write_data(client, BT532_WRITE_FLASH,
-						(u8 *)&firmware_data[flash_addr], TC_SECTOR_SZ_WRITE) < 0) {
-				zinitix_printk(KERN_INFO"error : write zinitix tc firmare\n");
-				goto fail_upgrade;
-			}
-			flash_addr += TC_SECTOR_SZ_WRITE;
-		}
-		i = 0;
-		while(1) {
-			if(flash_addr >= size)
-				break;
-			if(gpio_get_value(info->pdata->gpio_int))
-				break;
-			msleep(30);
-			if(++i>100)
-				break;
-		}
-
-		if(i>100) {
-			zinitix_printk("write timeout\n");
-			goto fail_upgrade;
-		}
-	}
-
-	if (write_cmd(client, 0x01DD) != I2C_SUCCESS) {
-		zinitix_printk("failed to flush cmd\n");
-		goto fail_upgrade;
-	}
-	msleep(100);
-	i = 0;
-
-	while(1) {
-		if(gpio_get_value(info->pdata->gpio_int))
-			break;
-		msleep(30);
-		if(++i>1000) {
-			zinitix_printk("flush timeout\n");
-			goto fail_upgrade;
-		}
-	}
-#else
-	if((chip_code == ZT7538_CHIP_CODE)||(chip_code == ZT7548_CHIP_CODE)||(chip_code == ZT7554_CHIP_CODE)) {
-		if (write_cmd(client, BT532_INIT_FLASH) != I2C_SUCCESS) {
-			zinitix_printk("failed to init flash\n");
-			goto fail_upgrade;
-		}
-
-		// Mass Erase
-		//====================================================
-		if (write_cmd(client, 0x01DF) != I2C_SUCCESS) {
-			zinitix_printk("failed to mass erase\n");
-			goto fail_upgrade;
-		}
-
-		msleep(100);
-
-		// Mass Erase End
-		//====================================================
-
-		if (write_reg(client, 0x01DE, 0x0001) != I2C_SUCCESS) {
-			zinitix_printk("failed to enter upgrade mode\n");
-			goto fail_upgrade;
-		}
-
-		usleep_range(1000, 1000);
-
-		if (write_reg(client, 0x01D3, 0x0008) != I2C_SUCCESS) {
-			zinitix_printk("failed to init upgrade mode\n");
-			goto fail_upgrade;
-		}
-	} else if(chip_code == BT43X_CHIP_CODE){
 	// Mass Erase
 	//====================================================
 	if (write_reg(client, 0xc108, 0x0007) != I2C_SUCCESS) {
@@ -2222,13 +1432,6 @@ retry_upgrade:
 		goto fail_upgrade;
 	}
 
-	}else {
-		fuzing_udelay = 30000;
-		if (write_cmd(client, BT532_INIT_FLASH) != I2C_SUCCESS) {
-			zinitix_printk(KERN_INFO "failed to init flash\n");
-			goto fail_upgrade;
-		}
-	}
 
 	for (flash_addr = 0; flash_addr < size; ) {
 		for (i = 0; i < page_sz/TC_SECTOR_SZ; i++) {
@@ -2243,15 +1446,14 @@ retry_upgrade:
 			usleep_range(100, 100);
 		}
 
-		usleep_range(fuzing_udelay, fuzing_udelay);	/*for fuzing delay*/
+		usleep_range(8*1000, 8*1000);	/*for fuzing delay*/
 	}
-#endif
 
 	if (write_reg(client, 0xc003, 0x0000) != I2C_SUCCESS) {
 		zinitix_printk("nvm write vpp off\n");
 		goto fail_upgrade;
 	}
-//	zinitix_printk(KERN_INFO "writing firmware data - \n");
+	zinitix_printk(KERN_INFO "writing firmware data - \n");
 	if (write_reg(client, 0xc104, 0x0000) != I2C_SUCCESS){
 		zinitix_printk("nvm wp enable\n");
 		goto fail_upgrade;
@@ -2266,31 +1468,13 @@ retry_upgrade:
 
 	zinitix_printk(KERN_INFO "read firmware data\n");
 
-#ifdef PAT_CONTROL
-	if (write_reg(client, 0x01D3, 0x0008) != I2C_SUCCESS) {
-		zinitix_printk( "failed to init upgrade mode\n");
-		goto fail_upgrade;
-	}
-	usleep_range(1 * 1000, 1 * 1000);
-
-	for (flash_addr = 0; flash_addr < size; ) {
-		for (i = 0; i < page_sz/TC_SECTOR_SZ_READ; i++) {
-			if (read_firmware_data(client, BT532_READ_FLASH,
-						(u8 *)&verify_data[flash_addr], TC_SECTOR_SZ_READ) < 0) {
-				input_err(true, &client->dev, "Failed to read firmare\n");
-				goto fail_upgrade;
-			}
-			flash_addr += TC_SECTOR_SZ_READ;
-		}
-	}
-#else
 	for (flash_addr = 0; flash_addr < size; ) {
 		for (i = 0; i < page_sz/TC_SECTOR_SZ; i++) {
 			//zinitix_debug_msg("read :addr=%04x, len=%d\n", flash_addr, TC_SECTOR_SZ);
 			if (read_firmware_data(client,
 				BT532_READ_FLASH,
 				(u8*)&verify_data[flash_addr], TC_SECTOR_SZ) < 0) {
-				input_err(true, &client->dev, "Failed to read firmare\n");
+				tsp_debug_err(true, &client->dev, "Failed to read firmare\n");
 
 				goto fail_upgrade;
 			}
@@ -2298,23 +1482,16 @@ retry_upgrade:
 			flash_addr += TC_SECTOR_SZ;
 		}
 	}
-#endif
 	/* verify */
-	input_info(true, &client->dev, "verify firmware data\n");
+	tsp_debug_info(true, &client->dev, "verify firmware data\n");
 	if (memcmp((u8 *)&firmware_data[0], (u8 *)&verify_data[0], size) == 0) {
-		input_info(true, &client->dev, "upgrade finished\n");
-
+		tsp_debug_info(true, &client->dev, "upgrade finished\n");
+		kfree(verify_data);
 		bt532_power_control(info, POWER_OFF);
 		bt532_power_control(info, POWER_ON_SEQUENCE);
 
 		if (!crc_check(info))
 			goto fail_upgrade;
-
-		if (verify_data){
-			zinitix_printk("kfree\n");
-			kfree(verify_data);
-			verify_data = NULL;
-		}
 
 		return true;
 	}
@@ -2323,76 +1500,25 @@ fail_upgrade:
 	bt532_power_control(info, POWER_OFF);
 
 	if (retry_cnt++ < INIT_RETRY_CNT) {
-		input_err(true, &client->dev, "upgrade failed : so retry... (%d)\n", retry_cnt);
+		tsp_debug_err(true, &client->dev, "upgrade failed : so retry... (%d)\n\n\n\n\n", retry_cnt);
 		goto retry_upgrade;
 	}
 
-	if (verify_data){
-		zinitix_printk("kfree\n");
+	if (verify_data != NULL)
 		kfree(verify_data);
-	}
 
-	input_info(true, &client->dev, "Failed to upgrade\n");
+	tsp_debug_info(true, &client->dev, "Failed to upgrade\n\n\n\n\n");
 
 	return false;
 }
 #endif
-
 static bool ts_hw_calibration(struct bt532_ts_info *info)
 {
 	struct i2c_client *client = info->client;
 	u16	chip_eeprom_info;
 	int time_out = 0;
-#ifdef PAT_CONTROL
-	u8 buff[6] = {0};
-	int ret;
 
-	ret = get_tsp_nvm_data(info, PAT_CAL_COUNT, (u8 *)buff, 6);
-	/* length 6 : PAT_CAL_COUNT, PAT_FIX_VERSION_0, PAT_FIX_VERSION_1 */
-	if(ret < 0){
-		input_info(true, &client->dev, "%s : data read fail\n", __func__);
-		return false;
-	}
-	input_info(true, &info->client->dev, "%s : %02x %02x %02x %02x %02x %02x , work_state=%d", 
-					__func__, buff[0], buff[1], buff[2], buff[3], buff[4], buff[5], info->work_state);
-
-	info->cap_info.cal_count = buff[0];
-	info->cap_info.tune_fix_ver = ((buff[4]<<8) | buff[2]);
-
-	input_info(true, &client->dev, "%s: pat_function=%d afe_base=%04X cal_count=%X tune_fix_ver=%04X\n", 
-					__func__, info->pdata->pat_function, info->pdata->afe_base, info->cap_info.cal_count, info->cap_info.tune_fix_ver);
-
-	if(info->cap_info.cal_count == 0xff){
-		info->cap_info.cal_count = 0;
-		input_info(true, &client->dev, "%s: initialize nv as default value & excute autotune \n", __func__);
-		goto start_calibration;
-	}
-
-	/* do not excute calibration check */
-	/* pat_function(0) */
-	if(info->pdata->pat_function == PAT_CONTROL_NONE && info->cap_info.cal_count != 0){
-		input_info(true, &client->dev, "%s : skip\n", __func__);
-		return true;
-	}
-	/* pat_function(2) */
-	if((info->pdata->pat_function == PAT_CONTROL_PAT_MAGIC) && (info->work_state == PROBE)){
-		if(info->pdata->afe_base > info->cap_info.tune_fix_ver){
-			info->cap_info.cal_count = 0;
-		}
-		if(info->cap_info.cal_count > 0){
-			input_info(true, &client->dev, "%s : work_state=probe skip\n", __func__);
-			return true;
-		}
-	}else if((info->pdata->pat_function == PAT_CONTROL_PAT_MAGIC) && (info->work_state == UPGRADE)){
-		if((info->cap_info.cal_count > 0) && (info->cap_info.cal_count <= PAT_MAX_LCIA)){
-			input_info(true, &client->dev, "%s : work_state=upgrade skip\n", __func__);
-			return true;
-		}
-	}
-start_calibration:
-#endif
-
-	input_info(true, &client->dev, "%s start\n", __func__);
+	tsp_debug_info(true, &client->dev, "%s: \n", __func__);
 
 	if (write_reg(client,
 		BT532_TOUCH_MODE, 0x07) != I2C_SUCCESS)
@@ -2423,7 +1549,7 @@ start_calibration:
 				BT532_CLEAR_INT_STATUS_CMD);
 
 		if (read_data(client,
-			BT532_EEPROM_INFO,
+			BT532_EEPROM_INFO_REG,
 			(u8 *)&chip_eeprom_info, 2) < 0)
 			return false;
 
@@ -2436,11 +1562,11 @@ start_calibration:
 			write_cmd(client, BT532_CALIBRATE_CMD);
 			usleep_range(10 * 1000, 10 * 1000);
 			write_cmd(client, BT532_CLEAR_INT_STATUS_CMD);
-			input_err(true, &client->dev, "h/w calibration retry timeout.\n");
+			tsp_debug_err(true, &client->dev, "h/w calibration retry timeout.\n");
 		}
 
 		if(time_out++ > 10){
-			input_err(true, &client->dev, "h/w calibration timeout.\n");
+			tsp_debug_err(true, &client->dev, "h/w calibration timeout.\n");
 			break;
 		}
 
@@ -2468,63 +1594,6 @@ start_calibration:
 	msleep(700);
 	write_reg(client, 0xc003, 0x0000);
 	write_reg(client, 0xc104, 0x0000);
-
-#ifdef PAT_CONTROL
-	/* cal_count */
-	if(info->work_state == PROBE){
-		if (info->pdata->pat_function == PAT_CONTROL_CLEAR_NV) {
-			/* pat_function(1) */
-			info->cap_info.cal_count = 0;
-		}else if (info->pdata->pat_function == PAT_CONTROL_PAT_MAGIC) {
-			/* pat_function(2)) */
-			info->cap_info.cal_count = PAT_MAGIC_NUMBER;
-		}else if (info->pdata->pat_function == PAT_CONTROL_FORCE_UPDATE) {
-			/* pat_function(5)) */
-			info->cap_info.cal_count = PAT_MAGIC_NUMBER;
-		}
-	}else{
-		if (info->pdata->pat_function == PAT_CONTROL_NONE) {
-			/* pat_function(0) */
-		}else if (info->pdata->pat_function == PAT_CONTROL_CLEAR_NV) {
-			/* pat_function(1) */
-			info->cap_info.cal_count = 0;
-		}else if (info->pdata->pat_function == PAT_CONTROL_PAT_MAGIC) {
-			/* pat_function(2) */
-			if((info->work_state == UPGRADE)){
-				if(info->cap_info.cal_count == 0)
-					info->cap_info.cal_count = PAT_MAGIC_NUMBER;
-				else
-					info->cap_info.cal_count += 1;
-			}
-		}else if (info->pdata->pat_function == PAT_CONTROL_FORCE_CMD) {
-			/* pat_function(6)) */
-			if(info->cap_info.cal_count >= PAT_MAGIC_NUMBER)
-				info->cap_info.cal_count = 0;
-
-			info->cap_info.cal_count += 1;
-			if(info->cap_info.cal_count > PAT_MAX_LCIA)
-				info->cap_info.cal_count = PAT_MAX_LCIA;
-		}else {
-			info->cap_info.cal_count += 1;
-		}
-
-		if(info->cap_info.cal_count > PAT_MAX_MAGIC)
-			info->cap_info.cal_count = PAT_MAX_MAGIC;
-	}
-
-	buff[0] = info->cap_info.cal_count;
-	buff[1] = 0;	//temp
-	buff[2] = info->cap_info.reg_data_version & 0xff;
-	buff[3] = 0;	//temp
-	buff[4] = ((info->cap_info.fw_version & 0xf)<<4) | (info->cap_info.fw_minor_version & 0xf);
-	buff[5] = 0;	//temp
-	
-	set_tsp_nvm_data(info, PAT_CAL_COUNT, buff, 6);
-
-	input_info(true, &client->dev, "%s end\n", __func__);
-	input_info(true, &client->dev, "%s: pat_function=%d cal_count=%X tune_fix_ver=%02X%02X\n", 
-					__func__, info->pdata->pat_function, buff[0], buff[4], buff[2]);
-#endif
 	return true;
 }
 
@@ -2538,19 +1607,19 @@ static int ic_version_check(struct bt532_ts_info *info)
 	/* get chip information */
 	ret = read_data(client, BT532_VENDOR_ID, (u8 *)&cap->vendor_id, 2);
 	if (ret < 0) {
-		input_err(true, &info->client->dev,"%s: fail vendor id\n", __func__);
+		tsp_debug_err(true, &info->client->dev,"%s: fail vendor id\n", __func__);
 		goto error;
 	}
 
 	ret = read_data(client, BT532_MINOR_FW_VERSION, (u8 *)&cap->fw_minor_version, 2);
 	if (ret < 0) {
-		input_err(true, &info->client->dev,"%s: fail fw_minor_version\n", __func__);
+		tsp_debug_err(true, &info->client->dev,"%s: fail fw_minor_version\n", __func__);
 		goto error;
 	}
 
 	ret = read_data(client, BT532_CHIP_REVISION, data, 8);
 	if (ret < 0) {
-		input_err(true, &info->client->dev,"%s: fail chip_revision\n", __func__);
+		tsp_debug_err(true, &info->client->dev,"%s: fail fw_major_version\n", __func__);
 		goto error;
 	}
 
@@ -2573,18 +1642,13 @@ static int fw_update_work(struct bt532_ts_info *info, bool force_update)
 	char fw_path[MAX_FW_PATH];
 	u16 chip_eeprom_info;
 
-	if(pdata->bringup){
-		input_info(true, &info->client->dev, "%s: bringup\n", __func__);
-		return 0;
-	}
-
 	snprintf(fw_path, MAX_FW_PATH, "%s", pdata->firmware_name);
-	input_info(true, &info->client->dev,
+	tsp_debug_info(true, &info->client->dev,
 		"%s: start\n", __func__);
 
 	ret = request_firmware(&tsp_fw, fw_path, &(info->client->dev));
 	if (ret < 0) {
-		input_info(true, &info->client->dev,
+		tsp_debug_info(true, &info->client->dev,
 			"%s: Firmware image %s not available\n", __func__, fw_path);
 		goto fw_request_fail;
 	}
@@ -2601,30 +1665,21 @@ static int fw_update_work(struct bt532_ts_info *info, bool force_update)
 	if (need_update == true || force_update == true) {
 		ret = ts_upgrade_firmware(info, info->fw_data, cap->ic_fw_size);
 		if (!ret)
-			input_err(true, &info->client->dev, "%s: failed fw update\n", __func__);
+			tsp_debug_err(true, &info->client->dev, "%s: failed fw update\n", __func__);
 
 		ret = ic_version_check(info);
 		if (ret < 0) {
-			input_err(true, &info->client->dev, "%s: failed ic version check\n", __func__);
+			tsp_debug_err(true, &info->client->dev, "%s: failed ic version check\n", __func__);
 		}
 	}
 
-	if (read_data(info->client, BT532_EEPROM_INFO,
-					(u8 *)&chip_eeprom_info, 2) < 0){
-		ret = -1;
+	if (read_data(info->client, BT532_EEPROM_INFO_REG,
+					(u8 *)&chip_eeprom_info, 2) < 0)
 		goto fw_request_fail;
-	}
 
-#ifdef PAT_CONTROL
-	if (need_update == true || force_update == true)
-#else
-	if (zinitix_bit_test(chip_eeprom_info, 0)) /* hw calibration bit*/
-#endif
-	{ 
-		if(ts_hw_calibration(info) == false){
-			ret = -1;
+	if (zinitix_bit_test(chip_eeprom_info, 0)) { /* hw calibration bit*/
+		if(ts_hw_calibration(info) == false)
 			goto fw_request_fail;
-		}
 	}
 
 fw_request_fail:
@@ -2638,13 +1693,15 @@ static bool init_touch(struct bt532_ts_info *info)
 	struct bt532_ts_platform_data *pdata = info->pdata;
 	struct capa_info *cap = &(info->cap_info);
 	u16 reg_val = 0;
-	u8 data[6] = {0};
+	u8 data[4] = {0};
+	
+	pr_info("[TSP]: %s:%d\n", __func__, __LINE__);
 
 	zinitix_bit_set(reg_val, BIT_PT_CNT_CHANGE);
 	zinitix_bit_set(reg_val, BIT_DOWN);
 	zinitix_bit_set(reg_val, BIT_MOVE);
 	zinitix_bit_set(reg_val, BIT_UP);
-#ifdef SUPPORTED_PALM_TOUCH
+#if (TOUCH_POINT_MODE == 2)
 	zinitix_bit_set(reg_val, BIT_PALM);
 	zinitix_bit_set(reg_val, BIT_PALM_REJECT);
 #endif
@@ -2665,7 +1722,7 @@ static bool init_touch(struct bt532_ts_info *info)
 	info->cap_info.total_node_num = info->cap_info.x_node_num * info->cap_info.y_node_num;
 	info->cap_info.multi_fingers = MAX_SUPPORTED_FINGER_NUM;
 
-	input_info(true, &info->client->dev, "node x %d, y %d  resolution x %d, y %d\n",
+	tsp_debug_info(true, &info->client->dev, "node x %d, y %d  resolution x %d, y %d\n",
 		info->cap_info.x_node_num, info->cap_info.y_node_num, info->cap_info.MaxX, info->cap_info.MaxY	);
 
 #if ESD_TIMER_INTERVAL
@@ -2675,22 +1732,14 @@ static bool init_touch(struct bt532_ts_info *info)
 
 	read_data(info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, (u8 *)&reg_val, 2);
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &info->client->dev, "Esd timer register = %d\n", reg_val);
+	tsp_debug_info(true, &info->client->dev, "Esd timer register = %d\n", reg_val);
 #endif
 #endif
 	if (!mini_init_touch(info))
 		goto fail_init;
+	
+	pr_info("[TSP]: %s:%d  Success!\n", __func__, __LINE__);
 
-	get_tsp_nvm_data(info, PAT_TSP_TEST_DATA, (u8 *)data, 2);
-	info->test_result.data[0] = data[0];
-
-	get_tsp_nvm_data(info, PAT_CAL_COUNT, (u8 *)data, 6);
-	info->cap_info.cal_count = data[0];
-	info->cap_info.tune_fix_ver = ((data[4]<<8) | data[2]);
-
-	input_info(true, &info->client->dev, "%s: tsp_test=%x pat_function=%d afe_base=%04X cal_count=%X tune_fix_ver=%04X\n", 
-					__func__, info->test_result.data[0], info->pdata->pat_function, info->pdata->afe_base, 
-					info->cap_info.cal_count, info->cap_info.tune_fix_ver);
 	return true;
 fail_init:
 	return false;
@@ -2699,11 +1748,12 @@ fail_init:
 static bool mini_init_touch(struct bt532_ts_info *info)
 {
 	struct i2c_client *client = info->client;
-	struct bt532_ts_platform_data *pdata = info->pdata;
 	int i;
+	
+	pr_info("[TSP]: %s:%d\n", __func__, __LINE__);
 
 	if (write_cmd(client, BT532_SWRESET_CMD) != I2C_SUCCESS) {
-		input_info(true, &client->dev, "Failed to write reset command\n");
+		tsp_debug_info(true, &client->dev, "Failed to write reset command\n");
 
 		goto fail_mini_init;
 	}
@@ -2712,15 +1762,10 @@ static bool mini_init_touch(struct bt532_ts_info *info)
 			info->touch_mode) != I2C_SUCCESS)
 		goto fail_mini_init;
 
-	/* cover_set */
-	if (write_reg(client, BT532_COVER_CONTROL_REG, COVER_OPEN) != I2C_SUCCESS)
-		goto fail_mini_init;
-
-	if (info->flip_enable) {
-		set_cover_type(info, info->flip_enable);
-	}
-
 	bt532_set_optional_mode(info, true);
+#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
+	write_reg(client, ZT75XX_RESOLUTION_EXPANDER, 4);	//x1 x2 x3 ...
+#endif
 
 	if (write_reg(client, BT532_INT_ENABLE_FLAG,
 			info->cap_info.ic_int_mask) != I2C_SUCCESS)
@@ -2739,36 +1784,20 @@ static bool mini_init_touch(struct bt532_ts_info *info)
 
 	esd_timer_start(CHECK_ESD_TIMER, info);
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "Started esd timer\n");
+	tsp_debug_info(true, &client->dev, "Started esd timer\n");
 #endif
 #endif
 
-	if(pdata->support_lpm_mode){
-		write_reg(info->client, ZT75XX_LPM_MODE_REG, 0);
-		write_reg(info->client, ZT75XX_SET_AOD_W_REG, 0);
-		write_reg(info->client, ZT75XX_SET_AOD_H_REG, 0);
-		write_reg(info->client, ZT75XX_SET_AOD_X_REG, 0);
-		write_reg(info->client, ZT75XX_SET_AOD_Y_REG, 0);
-	}
-
-	if((pdata->support_lpm_mode)&&(info->spay_enable||info->aod_enable)){
-		if(info->sleep_mode){
-			esd_timer_stop(info);
-			write_cmd(info->client, BT532_SLEEP_CMD);
-			input_info(true, &misc_info->client->dev, "%s, sleep mode\n", __func__);
-		}
-	}
-
-	input_info(true, &client->dev, "Successfully mini initialized\r\n");
+	tsp_debug_info(true, &client->dev, "Successfully mini initialized\r\n");
 	return true;
 
 fail_mini_init:
-	input_err(true, &client->dev, "Failed to initialize mini init\n");
+	tsp_debug_err(true, &client->dev, "Failed to initialize mini init\n");
 /*	bt532_power_control(info, POWER_OFF);
 	bt532_power_control(info, POWER_ON_SEQUENCE);
 
 	if(init_touch(info) == false) {
-		input_err(true, &client->dev, "Failed to initialize\n");
+		tsp_debug_err(true, &client->dev, "Failed to initialize\n");
 
 		return false;
 	}
@@ -2776,7 +1805,7 @@ fail_mini_init:
 #if ESD_TIMER_INTERVAL
 	esd_timer_start(CHECK_ESD_TIMER, info);
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "Started esd timer\n");
+	tsp_debug_info(true, &client->dev, "Started esd timer\n");
 #endif
 #endif
 	return true;*/
@@ -2797,9 +1826,9 @@ static void clear_report_data(struct bt532_ts_info *info)
 				input_report_key(info->input_dev, BUTTON_MAPPING_KEY[i], 0);
 				reported = true;
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-				input_info(true, &client->dev, "Button up = %d\n", i);
+				tsp_debug_info(true, &client->dev, "Button up = %d\n", i);
 #else
-				input_info(true, &client->dev, "Button up\n");
+				tsp_debug_info(true, &client->dev, "Button up\n");
 #endif
 			}
 		}
@@ -2810,16 +1839,12 @@ static void clear_report_data(struct bt532_ts_info *info)
 		sub_status = info->reported_touch_info.coord[i].sub_status;
 		if (zinitix_bit_test(sub_status, SUB_BIT_EXIST)) {
 			input_mt_slot(info->input_dev, i);
-#ifdef CONFIG_SEC_FACTORY
-			input_report_abs(info->input_dev, ABS_MT_PRESSURE, 0);
-#endif
 			input_mt_report_slot_state(info->input_dev,	MT_TOOL_FINGER, 0);
 			reported = true;
 			if (!m_ts_debug_mode && TSP_NORMAL_EVENT_MSG)
-				input_info(true, &client->dev, "[TSP] R [%02d] mc=%d\n", i, info->move_count[i]);
+				tsp_debug_info(true, &client->dev, "[TSP] R %02d\r\n", i);
 		}
 		info->reported_touch_info.coord[i].sub_status = 0;
-		info->move_count[i] = 0;
 	}
 
 	if (reported) {
@@ -2827,7 +1852,6 @@ static void clear_report_data(struct bt532_ts_info *info)
 	}
 
 	info->finger_cnt1=0;
-	info->check_multi = 0;
 #ifdef CONFIG_INPUT_BOOSTER
 	input_booster_send_event(BOOSTER_DEVICE_TOUCH, BOOSTER_MODE_FORCE_OFF);
 #endif
@@ -2835,27 +1859,6 @@ static void clear_report_data(struct bt532_ts_info *info)
 
 #define	PALM_REPORT_WIDTH	200
 #define	PALM_REJECT_WIDTH	255
-
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-void trustedui_mode_on(void){
-	input_info(true, &tui_tsp_info->client->dev, "%s, release all finger..", __func__);
-	clear_report_data(tui_tsp_info);
-	input_info(true, &tui_tsp_info->client->dev, "%s : esd timer disable", __func__);
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(tui_tsp_info);
-	write_reg(tui_tsp_info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0);
-#endif
-}
-
-void trustedui_mode_off(void){
-	input_info(true, &tui_tsp_info->client->dev, "%s : esd timer enable", __func__);
-#if ESD_TIMER_INTERVAL
-	write_reg(tui_tsp_info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL,
-		SCAN_RATE_HZ * ESD_TIMER_INTERVAL);
-	esd_timer_start(CHECK_ESD_TIMER, tui_tsp_info);
-#endif
-}
-#endif
 
 
 static irqreturn_t bt532_touch_work(int irq, void *data)
@@ -2867,63 +1870,31 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 	u8 reported = false;
 	u8 sub_status;
 	u8 prev_sub_status;
-	u32 x, y, w, maxX, maxY;
-#ifdef CONFIG_SEC_FACTORY
-	u32 z;
-#endif
+	u32 x, y, maxX, maxY;
+	u32 w;
 	u8 palm = 0;
-#ifdef SUPPORTED_PALM_TOUCH
-	u32	minor_w;
-#endif
 #ifdef CONFIG_INPUT_BOOSTER
 	bool booster_enable = false;
 #endif
-	u16 ic_status;
-#ifdef CONFIG_SECURE_TOUCH
-		if (IRQ_HANDLED == secure_filter_interrupt(info)) {
-			wait_for_completion_interruptible_timeout(&info->secure_interrupt,
-					msecs_to_jiffies(5 * MSEC_PER_SEC));
-	
-			dev_dbg(&info->client->dev,
-					"%s: secure interrupt handled\n", __func__);
-	
-			return IRQ_HANDLED;
-		}
-#endif
-
-	if((pdata->support_lpm_mode)&&(info->spay_enable||info->aod_enable)){
-		pm_wakeup_event(info->input_dev->dev.parent, 2000);
-	}
 
 	if (gpio_get_value(info->pdata->gpio_int)) {
-		input_err(true, &client->dev, "Invalid interrupt\n");
+		tsp_debug_err(true, &client->dev, "Invalid interrupt\n");
 
 		return IRQ_HANDLED;
 	}
 
 	if (down_trylock(&info->work_lock)) {
-		input_err(true, &client->dev, "%s: Failed to occupy work lock\n", __func__);
+		tsp_debug_err(true, &client->dev, "%s: Failed to occupy work lock\n", __func__);
 		write_cmd(client, BT532_CLEAR_INT_STATUS_CMD);
 
 		return IRQ_HANDLED;
 	}
-
-#ifdef CONFIG_SECURE_TOUCH
-	if (atomic_read(&info->secure_enabled) == SECURE_TOUCH_ENABLED) {
-		dev_err(&client->dev, "%s: Igonored. secure touch is enabled\n", __func__);
-		up(&info->work_lock);
-		return IRQ_HANDLED;
-	}
-#endif
-
 #if ESD_TIMER_INTERVAL
 	esd_timer_stop(info);
 #endif
 
-	read_data(client, BT532_DEBUG_REG, (u8 *)&ic_status, 2);
-
 	if (info->work_state != NOTHING) {
-		input_err(true, &client->dev, "%s: Other process occupied (0x%02x)\n", __func__, ic_status);
+		tsp_debug_err(true, &client->dev, "%s: Other process occupied\n", __func__);
 		usleep_range(DELAY_FOR_SIGNAL_DELAY, DELAY_FOR_SIGNAL_DELAY);
 
 		if (!gpio_get_value(info->pdata->gpio_int)) {
@@ -2936,8 +1907,9 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 
 	info->work_state = NORMAL;
 
-	if (ts_read_coord(info) == false) { /* maybe desirable reset */
-		input_err(true, &client->dev, "Failed to read info coord (0x%x)\n", ic_status);
+	if (ts_read_coord(info) == false || info->touch_info.status == 0xffff
+		|| info->touch_info.status == 0x1) { /* maybe desirable reset */
+		tsp_debug_err(true, &client->dev, "Failed to read info coord\n");
 		bt532_power_control(info, POWER_OFF);
 		bt532_power_control(info, POWER_ON_SEQUENCE);
 
@@ -2951,13 +1923,12 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 	if (info->touch_info.status == 0x0){
 		goto out;
 	}
-
 	reported = false;
 	if(pdata->support_touchkey){
 		if (zinitix_bit_test(info->touch_info.status, BIT_ICON_EVENT)) {
 			if (read_data(info->client, BT532_ICON_STATUS_REG,
 				(u8 *)(&info->icon_event_reg), 2) < 0) {
-				input_err(true, &client->dev, "Failed to read button info\n");
+				tsp_debug_err(true, &client->dev, "Failed to read button info\n");
 				write_cmd(client, BT532_CLEAR_INT_STATUS_CMD);
 
 				goto out;
@@ -2970,9 +1941,9 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 					input_report_key(info->input_dev, BUTTON_MAPPING_KEY[i], 1);
 					reported = true;
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-					input_info(true, &client->dev, "Button down = %d\n", i);
+					tsp_debug_info(true, &client->dev, "Button down = %d\n", i);
 #else
-					input_info(true, &client->dev, "Button down\n");
+					tsp_debug_info(true, &client->dev, "Button down\n");
 #endif
 				}
 			}
@@ -2984,9 +1955,9 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 					input_report_key(info->input_dev, BUTTON_MAPPING_KEY[i], 0);
 					reported = true;
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-					input_info(true, &client->dev, "Button up = %d\n", i);
+					tsp_debug_info(true, &client->dev, "Button up = %d\n", i);
 #else
-					input_info(true, &client->dev, "Button up\n");
+					tsp_debug_info(true, &client->dev, "Button up\n");
 #endif
 				}
 			}
@@ -2999,18 +1970,17 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 		for (i = 0; i < info->cap_info.multi_fingers; i++) {
 			prev_sub_status = info->reported_touch_info.coord[i].sub_status;
 			if (zinitix_bit_test(prev_sub_status, SUB_BIT_EXIST)) {
-				input_info(true, &client->dev, "Finger [%02d] up mc=%d (%d) (%x,P%02XT%04X)\n", i, info->move_count[i], __LINE__,
-						info->test_result.data[0], info->cap_info.cal_count, info->cap_info.tune_fix_ver);
-				if(info->finger_cnt1 > 0)
-					info->finger_cnt1--;
-				if (info->finger_cnt1 == 0){
+#if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+				tsp_debug_info(true, &client->dev, "Finger [%02d] up (%d)\n", i,__LINE__);
+#else
+				tsp_debug_info(true, &client->dev, "Finger up\n");
+#endif
+				info->finger_cnt1--;
+				if (info->finger_cnt1 == 0)
 					input_report_key(info->input_dev, BTN_TOUCH, 0);
-					info->check_multi = 0;
-				}
 				input_mt_slot(info->input_dev, i);
 				input_mt_report_slot_state(info->input_dev,
 											MT_TOOL_FINGER, 0);
-				info->move_count[i] = 0;
 #ifdef CONFIG_INPUT_BOOSTER
 				info->touch_pressed_num--;
 #endif
@@ -3030,12 +2000,12 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 
 #ifdef SUPPORTED_PALM_TOUCH
 	if (zinitix_bit_test(info->touch_info.status, BIT_PALM)) {
-		//input_info(true, &client->dev, "Palm report\n");
+		//tsp_debug_info(true, &client->dev, "Palm report\n");
 		palm = 1;
 	}
 
 	if (zinitix_bit_test(info->touch_info.status, BIT_PALM_REJECT)){
-		//input_info(true, &client->dev, "Palm reject\n");
+		//tsp_debug_info(true, &client->dev, "Palm reject\n");
 		palm = 2;
 	}
 #endif
@@ -3053,7 +2023,7 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 
 			if (x > maxX || y > maxY) {
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-				input_err(true, &client->dev,
+				tsp_debug_err(true, &client->dev,
 							"Invalid coord %d : x=%d, y=%d\n", i, x, y);
 #endif
 				continue;
@@ -3063,12 +2033,10 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 			info->touch_info.coord[i].y = y;
 			if (zinitix_bit_test(sub_status, SUB_BIT_DOWN)){
 #if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
-				input_info(true, &client->dev, "Finger [%02d] x = %d, y = %d,"
-							" w=%d p=%d fw=0x%02x%02x (0x%x)\n", i, x, y, w, palm, 
-							info->cap_info.hw_id, info->cap_info.reg_data_version, ic_status);
+				tsp_debug_info(true, &client->dev, "Finger [%02d] x = %d, y = %d,"
+							" w = %d fw=0x%02x%02x \n", i, x, y, w, info->cap_info.hw_id, info->cap_info.reg_data_version);
 #else
-				input_info(true, &client->dev, "Finger [%02d] w=%d p=%d fw=0x%02x%02x (0x%x)\n"
-							, i, w, palm, info->cap_info.hw_id, info->cap_info.reg_data_version, ic_status);
+				tsp_debug_info(true, &client->dev, "Finger down\n");
 #endif
 
 #ifdef CONFIG_INPUT_BOOSTER
@@ -3076,14 +2044,6 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 				booster_enable = true;
 #endif
 				info->finger_cnt1++;
-
-				if ((info->finger_cnt1 > 2) && (info->check_multi == 0)) {
-					info->check_multi = 1;
-					info->multi_count++;
-					input_info(true, &client->dev,"data : pn=%d mc=%d \n", info->finger_cnt1, info->multi_count);
-				}
-			} else if(zinitix_bit_test(sub_status, SUB_BIT_MOVE)) {
-				info->move_count[i]++;
 			}
 			if (w == 0)
 				w = 1;
@@ -3091,37 +2051,37 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 			input_mt_slot(info->input_dev, i);
 			input_mt_report_slot_state(info->input_dev, MT_TOOL_FINGER, 1);
 
-#ifdef SUPPORTED_PALM_TOUCH
+#if (TOUCH_POINT_MODE == 2)
 			if (palm == 0) {
 				if(w >= PALM_REPORT_WIDTH)
 					w = PALM_REPORT_WIDTH - 10;
-				minor_w = w;
 			} else if (palm == 1) {	//palm report
 				w = PALM_REPORT_WIDTH;
-				minor_w = PALM_REPORT_WIDTH/3;
 //				info->touch_info.coord[i].minor_width = PALM_REPORT_WIDTH;
 			} else if (palm == 2){	// palm reject
 //				x = y = 0;
 				w = PALM_REJECT_WIDTH;
-				minor_w = PALM_REJECT_WIDTH;
 //				info->touch_info.coord[i].minor_width = PALM_REJECT_WIDTH;
 			}
 #endif
 
 			input_report_abs(info->input_dev, ABS_MT_TOUCH_MAJOR, (u32)w);
-#ifdef CONFIG_SEC_FACTORY
-			if (read_data(info->client, BT532_REAL_WIDTH + i, (u8*)&z, 2) < 0)
-				input_info(true, &client->dev, "Failed to read %d's Real width %s\n", i, __func__);
-			z = z & 0x0f;	//temp
-			if (z < 1) z = 1;
-			input_report_abs(info->input_dev, ABS_MT_PRESSURE, (u32)z);
-#endif
+			input_report_abs(info->input_dev, ABS_MT_PRESSURE, (u32)w);
 			input_report_abs(info->input_dev, ABS_MT_WIDTH_MAJOR,
 								(u32)((palm == 1)?w-40:w));
-#ifdef SUPPORTED_PALM_TOUCH
+#if (TOUCH_POINT_MODE == 2)
 			input_report_abs(info->input_dev,
-				ABS_MT_TOUCH_MINOR, minor_w);
+				ABS_MT_TOUCH_MINOR, (u32)info->touch_info.coord[i].minor_width);
+//			input_report_abs(info->input_dev,
+//				ABS_MT_WIDTH_MINOR, (u32)info->touch_info.coord[i].minor_width);
+#ifdef SUPPORTED_PALM_TOUCH
+//			input_report_abs(info->input_dev, ABS_MT_ANGLE,
+//						(palm > 1)?70:info->touch_info.coord[i].angle - 90);
+			/*tsp_debug_info(true, &client->dev, "finger [%02d] angle = %03d\n", i,
+						info->touch_info.coord[i].angle);*/
 			input_report_abs(info->input_dev, ABS_MT_PALM, (palm > 0)?1:0);
+#endif
+//			input_report_abs(info->input_dev, ABS_MT_PALM, 1);
 #endif
 
 			input_report_abs(info->input_dev, ABS_MT_POSITION_X, x);
@@ -3129,18 +2089,18 @@ static irqreturn_t bt532_touch_work(int irq, void *data)
 			input_report_key(info->input_dev, BTN_TOUCH, 1);
 		} else if (zinitix_bit_test(sub_status, SUB_BIT_UP)||
 			zinitix_bit_test(prev_sub_status, SUB_BIT_EXIST)) {
-			input_info(true, &client->dev, "Finger [%02d] up mc=%d (%d) (%x,P%02XT%04X)\n", i, info->move_count[i], __LINE__,
-						info->test_result.data[0], info->cap_info.cal_count, info->cap_info.tune_fix_ver);
-			if(info->finger_cnt1 > 0)
-				info->finger_cnt1--;
-			if (info->finger_cnt1 == 0){
+#if !defined(CONFIG_SAMSUNG_PRODUCT_SHIP)
+			tsp_debug_info(true, &client->dev, "Finger [%02d] up (%d)\n", i,__LINE__);
+#else
+			tsp_debug_info(true, &client->dev, "Finger up\n");
+#endif
+			info->finger_cnt1--;
+			if (info->finger_cnt1 == 0)
 				input_report_key(info->input_dev, BTN_TOUCH, 0);
-				info->check_multi = 0;
-			}
 			memset(&info->touch_info.coord[i], 0x0, sizeof(struct coord));
 			input_mt_slot(info->input_dev, i);
 			input_mt_report_slot_state(info->input_dev, MT_TOOL_FINGER, 0);
-			info->move_count[i] = 0;
+
 #ifdef CONFIG_INPUT_BOOSTER
 			info->touch_pressed_num--;
 #endif
@@ -3181,143 +2141,79 @@ out:
 static int  bt532_ts_open(struct input_dev *dev)
 {
 	struct bt532_ts_info *info = misc_info;
-	struct bt532_ts_platform_data *pdata = info->pdata;
-	u8 prev_work_state;
 
-	input_info(true, &misc_info->client->dev, "%s, %d \n", __func__, __LINE__);
+	tsp_debug_dbg(true, &misc_info->client->dev, "%s, %d \n", __func__, __LINE__);
 
 	if (info == NULL)
 		return 0;
 
-	if((pdata->support_lpm_mode)&&(info->sleep_mode)){
-		down(&info->work_lock);
-		prev_work_state = info->work_state;
-		info->work_state = SLEEP_MODE_OUT;
-
-		input_info(true, &misc_info->client->dev, "%s, wake up\n", __func__);
-		write_cmd(info->client, 0x0A);
-		write_cmd(info->client, BT532_WAKEUP_CMD);
-		info->sleep_mode = 0;
-
-		bt532_set_optional_mode(info, false);
-		write_cmd(info->client, 0x0B);
-		info->work_state = prev_work_state;
+	down(&info->work_lock);
+	if (info->work_state != RESUME
+		&& info->work_state != EALRY_SUSPEND) {
+		zinitix_printk("invalid work proceedure (%d)\r\n",
+			info->work_state);
 		up(&info->work_lock);
-
-#if ESD_TIMER_INTERVAL
-		esd_timer_start(CHECK_ESD_TIMER, info);
-#endif
-		if (device_may_wakeup(&info->client->dev))
-			disable_irq_wake(info->irq);
-	}
-	else{
-		down(&info->work_lock);
-		if (info->work_state != RESUME
-			&& info->work_state != EALRY_SUSPEND) {
-			zinitix_printk("invalid work proceedure (%d)\r\n",
-				info->work_state);
-			up(&info->work_lock);
-			return 0;
-		}
-
-		bt532_power_control(info, POWER_ON_SEQUENCE);
-
-		if (!crc_check(info))
-			goto fail_late_resume;
-
-		if (mini_init_touch(info) == false)
-			goto fail_late_resume;
-		enable_irq(info->irq);
-		info->work_state = NOTHING;
-
-		if (g_ta_connected)
-			bt532_set_ta_status(info);
-
-		up(&info->work_lock);
-		zinitix_debug_msg("bt532_ts_open--\n");
 		return 0;
-
-	fail_late_resume:
-		zinitix_printk("failed to late resume\n");
-		enable_irq(info->irq);
-		info->work_state = NOTHING;
-		up(&info->work_lock);
 	}
+
+	bt532_power_control(info, POWER_ON_SEQUENCE);
+
+	if (!crc_check(info))
+		goto fail_late_resume;
+
+	if (mini_init_touch(info) == false)
+		goto fail_late_resume;
+	enable_irq(info->irq);
+	info->work_state = NOTHING;
+
+	if (g_ta_connected)
+		bt532_set_ta_status(info);
+
+	up(&info->work_lock);
+	zinitix_debug_msg("bt532_ts_open--\n");
+	return 0;
+
+fail_late_resume:
+	zinitix_printk("failed to late resume\n");
+	enable_irq(info->irq);
+	info->work_state = NOTHING;
+	up(&info->work_lock);
 	return 0;
 }
 
 static void bt532_ts_close(struct input_dev *dev)
 {
 	struct bt532_ts_info *info = misc_info;
-	struct bt532_ts_platform_data *pdata = info->pdata;
-	int i;
-	u8 prev_work_state;
+	/*info = container_of(h, struct bt532_ts_info, early_suspend);*/
 
-	input_info(true, &misc_info->client->dev, "%s, %d \n", __func__, __LINE__);
+	tsp_debug_dbg(true, &misc_info->client->dev, "%s, %d \n", __func__, __LINE__);
 
 	if (info == NULL)
 		return;
-	
-#ifdef CONFIG_SECURE_TOUCH
-	secure_touch_stop(info, 1);
-#endif
 
+	disable_irq(info->irq);
 #if ESD_TIMER_INTERVAL
 	flush_work(&info->tmr_work);
 #endif
 
-	if((pdata->support_lpm_mode)&&(info->spay_enable||info->aod_enable)){
-		down(&info->work_lock);
-		prev_work_state = info->work_state;
-		info->work_state = SLEEP_MODE_IN;
-		input_info(true, &misc_info->client->dev, "%s, sleep mode\n", __func__);
+	down(&info->work_lock);
+	if (info->work_state != NOTHING) {
+		zinitix_printk("invalid work proceedure (%d)\r\n",
+			info->work_state);
+		up(&info->work_lock);
+		enable_irq(info->irq);
+		return;
+	}
+	info->work_state = EALRY_SUSPEND;
+
+	clear_report_data(info);
 
 #if ESD_TIMER_INTERVAL
-		esd_timer_stop(info);
-#endif
-		input_info(true, &misc_info->client->dev, 
-				"%s: lpm_mode_reg set flag 0x%02x\n", __func__, lpm_mode_reg.flag);
-
-		write_cmd(info->client, 0x0A);
-		if (write_reg(info->client, ZT75XX_LPM_MODE_REG, lpm_mode_reg.flag) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "%s, fail lpm mode set\n", __func__);
-
-		write_cmd(info->client, BT532_SLEEP_CMD);
-		info->sleep_mode = 1;
-
-		/* clear garbage data */
-		for (i = 0; i < 2; i++) {
-			usleep_range(10 * 1000, 10 * 1000);
-			write_cmd(misc_info->client, BT532_CLEAR_INT_STATUS_CMD);
-		}
-		clear_report_data(info);		
-
-		write_cmd(info->client, 0x0B);
-		info->work_state = prev_work_state;
-		if (device_may_wakeup(&info->client->dev))
-			enable_irq_wake(info->irq);
-	}
-	else{
-		disable_irq(info->irq);
-		down(&info->work_lock);
-		if (info->work_state != NOTHING) {
-			zinitix_printk("invalid work proceedure (%d)\r\n",
-				info->work_state);
-			up(&info->work_lock);
-			enable_irq(info->irq);
-			return;
-		}
-		info->work_state = EALRY_SUSPEND;
-
-		clear_report_data(info);
-
-#if ESD_TIMER_INTERVAL
-		/*write_reg(info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0);*/
-		esd_timer_stop(info);
+	/*write_reg(info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0);*/
+	esd_timer_stop(info);
 #endif
 
-		bt532_power_control(info, POWER_OFF);
-	}
+	bt532_power_control(info, POWER_OFF);
 
 	zinitix_debug_msg("bt532_ts_close--\n");
 	up(&info->work_lock);
@@ -3330,32 +2226,36 @@ static void bt532_ts_late_resume(struct early_suspend *h)
 {
 	struct bt532_ts_info *info = misc_info;
 	//info = container_of(h, struct bt532_ts_info, early_suspend);
+	
+	tsp_debug_dbg(true, &misc_info->client->dev, "%s, %d \n", __func__, __LINE__);
 
 	if (info == NULL)
 		return;
-	//zinitix_printk("late resume++\r\n");
+	zinitix_printk("late resume++\r\n");
 
 	down(&info->work_lock);
 	if (info->work_state != RESUME
 		&& info->work_state != EALRY_SUSPEND) {
-		zinitix_printk("invalid work proceedure (%d)\r\n",
+		zinitix_printk("invalid work procedure (%d)\r\n",
 			info->work_state);
 		up(&info->work_lock);
 		return;
 	}
-#ifdef CONFIG_PM
-	write_cmd(info->client, BT532_WAKEUP_CMD);
-	usleep_range(1 * 1000, 1 * 1000);
-#else
+
 	bt532_power_control(info, POWER_ON_SEQUENCE);
-#endif
+
 	if (!crc_check(info))
 		goto fail_late_resume;
 
 	if (mini_init_touch(info) == false)
 		goto fail_late_resume;
+	
 	enable_irq(info->irq);
 	info->work_state = NOTHING;
+	
+	if (g_ta_connected)
+		bt532_set_ta_status(info);
+
 	up(&info->work_lock);
 	zinitix_debug_msg("late resume--\n");
 	return;
@@ -3371,6 +2271,8 @@ static void bt532_ts_early_suspend(struct early_suspend *h)
 {
 	struct bt532_ts_info *info = misc_info;
 	/*info = container_of(h, struct bt532_ts_info, early_suspend);*/
+	
+	tsp_debug_dbg(true, &misc_info->client->dev, "%s, %d \n", __func__, __LINE__);
 
 	if (info == NULL)
 		return;
@@ -3396,25 +2298,15 @@ static void bt532_ts_early_suspend(struct early_suspend *h)
 	clear_report_data(info);
 
 #if ESD_TIMER_INTERVAL
-	write_reg(info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0);
+	/* write_reg(info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0); */
 	esd_timer_stop(info);
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "Stopped esd timer\n");
+	tsp_debug_info(true, &client->dev, "Stopped esd timer\n");
 #endif
 #endif
 
-#ifdef CONIFG_PM
-	write_reg(info->client, BT532_INT_ENABLE_FLAG, 0x0);
-
-	usleep_range(100, 100);
-	if (write_cmd(info->client, BT532_SLEEP_CMD) != I2C_SUCCESS) {
-		zinitix_printk("failed to enter into sleep mode\n");
-		up(&info->work_lock);
-		return;
-	}
-#else
 	bt532_power_control(info, POWER_OFF);
-#endif
+
 	zinitix_debug_msg("early suspend--\n");
 	up(&info->work_lock);
 	return;
@@ -3428,11 +2320,11 @@ static int bt532_ts_resume(struct device *dev)
 	struct bt532_ts_info *info = i2c_get_clientdata(client);
 
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "resume++\n");
+	tsp_debug_info(true, &client->dev, "resume++\n");
 #endif
 	down(&info->work_lock);
 	if (info->work_state != SUSPEND) {
-		input_err(true, &client->dev, "%s: Invalid work proceedure (%d)\n",
+		tsp_debug_err(true, &client->dev, "%s: Invalid work proceedure (%d)\n",
 				__func__, info->work_state);
 		up(&info->work_lock);
 
@@ -3447,12 +2339,12 @@ static int bt532_ts_resume(struct device *dev)
 	info->work_state = NOTHING;
 	crc_check(info);
 	if (mini_init_touch(info) == false)
-		input_err(true, &client->dev, "Failed to resume\n");
+		tsp_debug_err(true, &client->dev, "Failed to resume\n");
 	enable_irq(info->irq);
 #endif
 
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "resume--\n");
+	tsp_debug_info(true, &client->dev, "resume--\n");
 #endif
 	up(&info->work_lock);
 
@@ -3465,7 +2357,7 @@ static int bt532_ts_suspend(struct device *dev)
 	struct bt532_ts_info *info = i2c_get_clientdata(client);
 
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "suspend++\n");
+	tsp_debug_info(true, &client->dev, "suspend++\n");
 #endif
 
 #ifndef CONFIG_HAS_EARLYSUSPEND
@@ -3478,7 +2370,7 @@ static int bt532_ts_suspend(struct device *dev)
 	down(&info->work_lock);
 	if (info->work_state != NOTHING
 		&& info->work_state != EALRY_SUSPEND) {
-		input_err(true, &client->dev,"%s: Invalid work proceedure (%d)\n",
+		tsp_debug_err(true, &client->dev,"%s: Invalid work proceedure (%d)\n",
 				__func__, info->work_state);
 		up(&info->work_lock);
 #ifndef CONFIG_HAS_EARLYSUSPEND
@@ -3493,7 +2385,7 @@ static int bt532_ts_suspend(struct device *dev)
 #if ESD_TIMER_INTERVAL
 	esd_timer_stop(info);
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "Stopped esd timer\n");
+	tsp_debug_info(true, &client->dev, "Stopped esd timer\n");
 #endif
 #endif
 #endif
@@ -3518,62 +2410,7 @@ static bool ts_set_touchmode(u16 value){
 
 	down(&misc_info->work_lock);
 	if (misc_info->work_state != NOTHING) {
-		input_info(true, &misc_info->client->dev, "other process occupied.. (%d)\n",
-			misc_info->work_state);
-		enable_irq(misc_info->irq);
-		up(&misc_info->work_lock);
-		return -1;
-	}
-	//wakeup cmd
-	write_cmd(misc_info->client, 0x0A);
-	usleep_range(20 * 1000, 20 * 1000);
-	write_cmd(misc_info->client, 0x0A);
-	usleep_range(20 * 1000, 20 * 1000);
-
-	misc_info->work_state = SET_MODE;
-
-	if (value == TOUCH_SEC_MODE)
-		misc_info->touch_mode = TOUCH_POINT_MODE;
-	else
-		misc_info->touch_mode = value;
-
-	input_info(true, &misc_info->client->dev, "[zinitix_touch] tsp_set_testmode, "
-		"touchkey_testmode = %d\r\n", misc_info->touch_mode);
-
-	if (misc_info->touch_mode != TOUCH_POINT_MODE) {
-		if (write_reg(misc_info->client, BT532_DELAY_RAW_FOR_HOST,
-			RAWDATA_DELAY_FOR_HOST) != I2C_SUCCESS)
-			zinitix_printk("Fail to set BT532_DELAY_RAW_FOR_HOST.\r\n");
-	}
-
-	if (write_reg(misc_info->client, BT532_TOUCH_MODE,
-			misc_info->touch_mode) != I2C_SUCCESS)
-		input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-				"Fail to set ZINITX_TOUCH_MODE %d.\r\n", misc_info->touch_mode);
-
-	/* clear garbage data */
-	for (i = 0; i < 10; i++) {
-		usleep_range(20 * 1000, 20 * 1000);
-		write_cmd(misc_info->client, BT532_CLEAR_INT_STATUS_CMD);
-	}
-
-	misc_info->work_state = NOTHING;
-	enable_irq(misc_info->irq);
-	up(&misc_info->work_lock);
-	return 1;
-}
-#endif
-
-#if 0
-static bool ts_set_touchmode2(u16 value)
-{
-	int i;
-
-	disable_irq(misc_info->irq);
-
-	down(&misc_info->work_lock);
-	if (misc_info->work_state != NOTHING) {
-		input_info(true, &misc_info->client->dev, "other process occupied.. (%d)\n",
+		tsp_debug_info(true, &misc_info->client->dev, "other process occupied.. (%d)\n",
 			misc_info->work_state);
 		enable_irq(misc_info->irq);
 		up(&misc_info->work_lock);
@@ -3587,13 +2424,13 @@ static bool ts_set_touchmode2(u16 value)
 
 	if (misc_info->touch_mode == TOUCH_POINT_MODE) {
 		/* factory data */
-#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-		read_data(misc_info->client, ZT75XX_MUTUAL_AMP_V_SEL, (u8 *)&misc_info->cap_info.mutual_amp_v_sel, 2);
-#else
-		read_data(misc_info->client, BT532_DND_U_COUNT, (u8 *)&misc_info->cap_info.u_cnt, 2);
-#endif
+		read_data(misc_info->client, BT532_DND_N_COUNT,	(u8 *)&misc_info->cap_info.N_cnt, 2);
+		read_data(misc_info->client, BT532_DND_U_COUNT,	(u8 *)&misc_info->cap_info.u_cnt, 2);
 		read_data(misc_info->client, BT532_AFE_FREQUENCY, (u8 *)&misc_info->cap_info.afe_frequency, 2);
 		read_data(misc_info->client, BT532_DND_SHIFT_VALUE, (u8 *)&misc_info->cap_info.shift_value, 2);
+#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
+		read_data(misc_info->client, ZT75XX_MUTUAL_AMP_V_SEL, (u8 *)&misc_info->cap_info.mutual_amp_v_sel, 2);
+#endif
 	}
 	misc_info->work_state = SET_MODE;
 
@@ -3601,43 +2438,42 @@ static bool ts_set_touchmode2(u16 value)
 #ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
 		if (write_reg(misc_info->client, ZT75XX_MUTUAL_AMP_V_SEL,
 						SEC_MUTUAL_AMP_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
 					"Fail to set ZT75XX_MUTUAL_AMP_V_SEL %x.\n", SEC_MUTUAL_AMP_V_SEL);
 #endif
 		if (write_reg(misc_info->client, BT532_DND_N_COUNT,
-						SEC_HFDND_N_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-						"Fail to set BT532_HFDND_N_COUNT %d.\n", SEC_HFDND_N_COUNT);
+						SEC_DND_N_COUNT)!=I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+					"Fail to set BT532_DND_N_COUNT %d.\n", SEC_DND_N_COUNT);
 		if (write_reg(misc_info->client, BT532_DND_U_COUNT,
-						SEC_HFDND_U_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-						"Fail to set BT532_HFDND_U_COUNT %d.\n", SEC_HFDND_U_COUNT);
+						SEC_DND_U_COUNT)!=I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+					"Fail to set BT532_DND_U_COUNT %d.\n", SEC_DND_U_COUNT);
 		if (write_reg(misc_info->client, BT532_AFE_FREQUENCY,
-						SEC_HFDND_FREQUENCY)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set BT532_AFE_FREQUENCY %d.\n", SEC_HFDND_FREQUENCY);
+						SEC_DND_FREQUENCY)!=I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+					"Fail to set BT532_AFE_FREQUENCY %d.\n", SEC_DND_FREQUENCY);
 	} else if(misc_info->touch_mode == TOUCH_DND_MODE) {
 #ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
 		if (write_reg(misc_info->client, ZT75XX_MUTUAL_AMP_V_SEL,
-			misc_info->cap_info.mutual_amp_v_sel) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+						misc_info->cap_info.mutual_amp_v_sel) != I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
 				"Fail to reset ZT75XX_MUTUAL_AMP_V_SEL %d.\n",
 				misc_info->cap_info.mutual_amp_v_sel);
-#else
-		if (write_reg(misc_info->client, BT532_DND_U_COUNT,
-			misc_info->cap_info.u_cnt) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-				"Fail to reset BT532_DND_U_COUNT %d.\n",
-				misc_info->cap_info.u_cnt);
 #endif
 		if (write_reg(misc_info->client, BT532_DND_SHIFT_VALUE,
 			misc_info->cap_info.shift_value) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
 				"Fail to reset BT532_DND_SHIFT_VALUE %d.\n",
 				misc_info->cap_info.shift_value);
+		if (write_reg(misc_info->client, BT532_DND_U_COUNT,
+			misc_info->cap_info.u_cnt) != I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+				"Fail to reset BT532_DND_U_COUNT %d.\n",
+				misc_info->cap_info.u_cnt);
 		if (write_reg(misc_info->client, BT532_AFE_FREQUENCY,
 			misc_info->cap_info.afe_frequency) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
 				"Fail to reset BT532_AFE_FREQUENCY %d.\n",
 				misc_info->cap_info.afe_frequency);
 	}
@@ -3647,7 +2483,7 @@ static bool ts_set_touchmode2(u16 value)
 	else
 		misc_info->touch_mode = value;
 
-	input_info(true, &misc_info->client->dev, "[zinitix_touch] tsp_set_testmode, "
+	tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] tsp_set_testmode, "
 		"touchkey_testmode = %d\r\n", misc_info->touch_mode);
 
 	if (misc_info->touch_mode != TOUCH_POINT_MODE) {
@@ -3658,7 +2494,7 @@ static bool ts_set_touchmode2(u16 value)
 
 	if (write_reg(misc_info->client, BT532_TOUCH_MODE,
 			misc_info->touch_mode) != I2C_SUCCESS)
-		input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+		tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
 				"Fail to set ZINITX_TOUCH_MODE %d.\r\n", misc_info->touch_mode);
 
 	/* clear garbage data */
@@ -3674,8 +2510,7 @@ static bool ts_set_touchmode2(u16 value)
 }
 #endif
 
-#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-static bool ts_set_touchmode3(u16 value)
+static bool ts_set_touchmode2(u16 value)
 {
 	int i;
 
@@ -3683,7 +2518,7 @@ static bool ts_set_touchmode3(u16 value)
 
 	down(&misc_info->work_lock);
 	if (misc_info->work_state != NOTHING) {
-		input_info(true, &misc_info->client->dev, "other process occupied.. (%d)\n",
+		tsp_debug_info(true, &misc_info->client->dev, "other process occupied.. (%d)\n",
 			misc_info->work_state);
 		enable_irq(misc_info->irq);
 		up(&misc_info->work_lock);
@@ -3697,233 +2532,90 @@ static bool ts_set_touchmode3(u16 value)
 
 	if (misc_info->touch_mode == TOUCH_POINT_MODE) {
 		/* factory data */
-		read_data(misc_info->client, ZT75XX_MUTUAL_AMP_V_SEL, (u8 *)&misc_info->cap_info.mutual_amp_v_sel, 2);
-		read_data(misc_info->client, ZT75XX_SX_AMP_V_SEL, (u8 *)&misc_info->cap_info.sx_amp_v_sel, 2);
-		read_data(misc_info->client, ZT75XX_SX_SUB_V_SEL, (u8 *)&misc_info->cap_info.sx_sub_v_sel, 2);
-		read_data(misc_info->client, ZT75XX_SY_AMP_V_SEL, (u8 *)&misc_info->cap_info.sy_amp_v_sel, 2);
-		read_data(misc_info->client, ZT75XX_SY_SUB_V_SEL, (u8 *)&misc_info->cap_info.sy_sub_v_sel, 2);
+		read_data(misc_info->client, BT532_DND_N_COUNT,	(u8 *)&misc_info->cap_info.N_cnt, 2);
+		read_data(misc_info->client, BT532_DND_U_COUNT,	(u8 *)&misc_info->cap_info.u_cnt, 2);
 		read_data(misc_info->client, BT532_AFE_FREQUENCY, (u8 *)&misc_info->cap_info.afe_frequency, 2);
-		read_data(misc_info->client, BT532_DND_SHIFT_VALUE, (u8 *)&misc_info->cap_info.shift_value, 2);
+		read_data(misc_info->client, BT532_DND_SHIFT_VALUE,	(u8 *)&misc_info->cap_info.shift_value, 2);
+#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
+		read_data(misc_info->client, ZT75XX_MUTUAL_AMP_V_SEL, (u8 *)&misc_info->cap_info.mutual_amp_v_sel, 2);
+#endif
 	}
 	misc_info->work_state = SET_MODE;
 
-	if(value == TOUCH_RXSHORT_MODE) {
-		if (write_reg(misc_info->client, ZT75XX_SY_AMP_V_SEL,
-						SEC_SY_AMP_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SY_AMP_V_SEL %d.\n", SEC_SY_AMP_V_SEL);
-		if (write_reg(misc_info->client, ZT75XX_SY_SUB_V_SEL,
-						SEC_SY_SUB_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SY_SUB_V_SEL %d.\n", SEC_SY_SUB_V_SEL);
+	if(value == TOUCH_DND_MODE) {
+#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
+		if (write_reg(misc_info->client, ZT75XX_MUTUAL_AMP_V_SEL,
+						SEC_MUTUAL_AMP_V_SEL)!=I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+					"Fail to set ZT75XX_MUTUAL_AMP_V_SEL %x.\n", SEC_MUTUAL_AMP_V_SEL);
+#endif
 		if (write_reg(misc_info->client, BT532_DND_N_COUNT,
-						SEC_SHORT_N_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_N_COUNT %d.\n", SEC_SHORT_N_COUNT);
+						SEC_HFDND_N_COUNT)!=I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+					"Fail to set BT532_DND_N_COUNT %d.\n", SEC_HFDND_N_COUNT);
 		if (write_reg(misc_info->client, BT532_DND_U_COUNT,
-						SEC_SHORT_U_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_U_COUNT %d.\n", SEC_SHORT_U_COUNT);
-	}
-	else if(value == TOUCH_TXSHORT_MODE) {
-		if (write_reg(misc_info->client, ZT75XX_SX_AMP_V_SEL,
-						SEC_SX_AMP_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SX_AMP_V_SEL %d.\n", SEC_SX_AMP_V_SEL);
-		if (write_reg(misc_info->client, ZT75XX_SX_SUB_V_SEL,
-						SEC_SX_SUB_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SX_SUB_V_SEL %d.\n", SEC_SX_SUB_V_SEL);
-		if (write_reg(misc_info->client, BT532_DND_N_COUNT,
-						SEC_SHORT_N_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_N_COUNT %d.\n", SEC_SHORT_N_COUNT);
-		if (write_reg(misc_info->client, BT532_DND_U_COUNT,
-						SEC_SHORT_U_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_U_COUNT %d.\n", SEC_SHORT_U_COUNT);
-	}
-	else if(misc_info->touch_mode == TOUCH_RXSHORT_MODE || misc_info->touch_mode == TOUCH_TXSHORT_MODE ) {
+						SEC_HFDND_U_COUNT)!=I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+					"Fail to set BT532_DND_U_COUNT %d.\n", SEC_HFDND_U_COUNT);
+		if (write_reg(misc_info->client, BT532_AFE_FREQUENCY,
+						SEC_HFDND_FREQUENCY)!=I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+					"Fail to set BT532_AFE_FREQUENCY %d.\n", SEC_HFDND_FREQUENCY);
+	} else if(misc_info->touch_mode == TOUCH_DND_MODE) {
+#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
 		if (write_reg(misc_info->client, ZT75XX_MUTUAL_AMP_V_SEL,
 						misc_info->cap_info.mutual_amp_v_sel) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to reset ZT75XX_MUTUAL_AMP_V_SEL %d.\n",
-					misc_info->cap_info.mutual_amp_v_sel);
-		if (write_reg(misc_info->client, ZT75XX_SY_AMP_V_SEL,
-						misc_info->cap_info.sy_amp_v_sel) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to reset ZT75XX_SY_AMP_V_SEL %d.\n",
-					misc_info->cap_info.sy_amp_v_sel);
-		if (write_reg(misc_info->client, ZT75XX_SY_SUB_V_SEL,
-						misc_info->cap_info.sy_sub_v_sel) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to reset ZT75XX_SY_SUB_V_SEL %d.\n",
-					misc_info->cap_info.sy_sub_v_sel);
-		if (write_reg(misc_info->client, ZT75XX_SX_AMP_V_SEL,
-						misc_info->cap_info.sx_amp_v_sel) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to reset ZT75XX_SX_AMP_V_SEL %d.\n",
-					misc_info->cap_info.sx_amp_v_sel);
-		if (write_reg(misc_info->client, ZT75XX_SX_SUB_V_SEL,
-						misc_info->cap_info.sx_sub_v_sel) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to reset ZT75XX_SX_SUB_V_SEL %d.\n",
-					misc_info->cap_info.sx_sub_v_sel);
-		if (write_reg(misc_info->client, BT532_DND_SHIFT_VALUE,
-						misc_info->cap_info.shift_value) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to reset BT532_DND_SHIFT_VALUE %d.\n",
-					misc_info->cap_info.shift_value);
-		if (write_reg(misc_info->client, BT532_AFE_FREQUENCY,
-						misc_info->cap_info.afe_frequency) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to reset BT532_AFE_FREQUENCY %d.\n",
-					misc_info->cap_info.afe_frequency);
-	}
-	if (value == TOUCH_SEC_MODE)
-		misc_info->touch_mode = TOUCH_POINT_MODE;
-	else
-		misc_info->touch_mode = value;
-
-	input_info(true, &misc_info->client->dev, "[zinitix_touch] tsp_set_testmode, "
-		"touchkey_testmode = %d\r\n", misc_info->touch_mode);
-
-	if (misc_info->touch_mode != TOUCH_POINT_MODE) {
-			if (write_reg(misc_info->client, BT532_DELAY_RAW_FOR_HOST,
-				RAWDATA_DELAY_FOR_HOST) != I2C_SUCCESS)
-				zinitix_printk("Fail to set BT532_DELAY_RAW_FOR_HOST.\r\n");
-	}
-
-	if (write_reg(misc_info->client, BT532_TOUCH_MODE,
-				misc_info->touch_mode) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set ZINITX_TOUCH_MODE %d.\r\n", misc_info->touch_mode);
-
-	/* clear garbage data */
-	for (i = 0; i < 10; i++) {
-		usleep_range(20 * 1000, 20 * 1000);
-		write_cmd(misc_info->client, BT532_CLEAR_INT_STATUS_CMD);
-	}
-
-	misc_info->work_state = NOTHING;
-	enable_irq(misc_info->irq);
-	up(&misc_info->work_lock);
-	return 1;
-}
-
-static bool ts_set_self_sat_touchmode(u16 value)
-{
-	int i;
-
-	disable_irq(misc_info->irq);
-
-	down(&misc_info->work_lock);
-	if (misc_info->work_state != NOTHING) {
-		input_info(true, &misc_info->client->dev, "other process occupied.. (%d)\n",
-			misc_info->work_state);
-		enable_irq(misc_info->irq);
-		up(&misc_info->work_lock);
-		return -1;
-	}
-	//wakeup cmd
-	write_cmd(misc_info->client, 0x0A);
-	usleep_range(20 * 1000, 20 * 1000);
-	write_cmd(misc_info->client, 0x0A);
-	usleep_range(20 * 1000, 20 * 1000);
-
-	if(value == TOUCH_SELF_DND_MODE) {
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT_FREQUENCY,
-						SEC_SY_SAT_FREQUENCY)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SY_AMP_V_SEL %d.\n", SEC_SY_SAT_FREQUENCY);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT_N_COUNT,
-						SEC_SY_SAT_N_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SY_SUB_V_SEL %d.\n", SEC_SY_SAT_N_COUNT);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT_U_COUNT,
-						SEC_SY_SAT_U_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_N_COUNT %d.\n", SEC_SY_SAT_U_COUNT);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT_RBG_SEL,
-						SEC_SY_SAT_RBG_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_U_COUNT %d.\n", SEC_SY_SAT_RBG_SEL);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT_AMP_V_SEL,
-						SEC_SY_SAT_AMP_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_N_COUNT %d.\n", SEC_SY_SAT_AMP_V_SEL);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT_SUB_V_SEL,
-						SEC_SY_SAT_SUB_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_U_COUNT %d.\n", SEC_SY_SAT_SUB_V_SEL);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT2_FREQUENCY,
-						SEC_SY_SAT2_FREQUENCY)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_N_COUNT %d.\n", SEC_SY_SAT2_FREQUENCY);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT2_N_COUNT,
-						SEC_SY_SAT2_N_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_U_COUNT %d.\n", SEC_SY_SAT2_N_COUNT);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT2_U_COUNT,
-						SEC_SY_SAT2_U_COUNT)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_N_COUNT %d.\n", SEC_SY_SAT2_U_COUNT);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT2_RBG_SEL,
-						SEC_SY_SAT2_RBG_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_U_COUNT %d.\n", SEC_SY_SAT2_RBG_SEL);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT2_AMP_V_SEL,
-						SEC_SY_SAT2_AMP_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_N_COUNT %d.\n", SEC_SY_SAT2_AMP_V_SEL);
-
-		if (write_reg(misc_info->client, ZT75XX_SY_SAT2_SUB_V_SEL,
-						SEC_SY_SAT2_SUB_V_SEL)!=I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set SEC_SHORT_U_COUNT %d.\n", SEC_SY_SAT2_SUB_V_SEL);
-	}
-		
-	if (value == TOUCH_SEC_MODE)
-		misc_info->touch_mode = TOUCH_POINT_MODE;
-	else
-		misc_info->touch_mode = value;
-	
-	input_info(true, &misc_info->client->dev, "[zinitix_touch] ts_set_self_sat_touchmode, "
-		"touchkey_testmode = %d\r\n", misc_info->touch_mode);
-	
-	if (misc_info->touch_mode != TOUCH_POINT_MODE) {
-			if (write_reg(misc_info->client, BT532_DELAY_RAW_FOR_HOST,
-				RAWDATA_DELAY_FOR_HOST) != I2C_SUCCESS)
-				zinitix_printk("Fail to set BT532_DELAY_RAW_FOR_HOST.\r\n");
-	}
-	
-	if (write_reg(misc_info->client, BT532_TOUCH_MODE,
-				misc_info->touch_mode) != I2C_SUCCESS)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
-					"Fail to set ZINITX_TOUCH_MODE %d.\r\n", misc_info->touch_mode);
-	
-	/* clear garbage data */
-	for (i = 0; i < 10; i++) {
-		usleep_range(20 * 1000, 20 * 1000);
-		write_cmd(misc_info->client, BT532_CLEAR_INT_STATUS_CMD);
-	}
-	
-	misc_info->work_state = NOTHING;
-	enable_irq(misc_info->irq);
-	up(&misc_info->work_lock);
-	return 1;
-}
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+				"Fail to reset ZT75XX_MUTUAL_AMP_V_SEL %d.\n",
+				misc_info->cap_info.mutual_amp_v_sel);
 #endif
+		if (write_reg(misc_info->client, BT532_DND_SHIFT_VALUE,
+			misc_info->cap_info.shift_value) != I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+				"Fail to reset BT532_DND_SHIFT_VALUE %d.\n",
+				misc_info->cap_info.shift_value);
+		if (write_reg(misc_info->client, BT532_DND_U_COUNT,
+			misc_info->cap_info.u_cnt) != I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+				"Fail to reset BT532_DND_U_COUNT %d.\n",
+				misc_info->cap_info.u_cnt);
+		if (write_reg(misc_info->client, BT532_AFE_FREQUENCY,
+			misc_info->cap_info.afe_frequency) != I2C_SUCCESS)
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+				"Fail to reset BT532_AFE_FREQUENCY %d.\n",
+				misc_info->cap_info.afe_frequency);
+	}
+
+	if (value == TOUCH_SEC_MODE)
+		misc_info->touch_mode = TOUCH_POINT_MODE;
+	else
+		misc_info->touch_mode = value;
+
+	tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] tsp_set_testmode, "
+		"touchkey_testmode = %d\r\n", misc_info->touch_mode);
+
+	if (misc_info->touch_mode != TOUCH_POINT_MODE) {
+		if (write_reg(misc_info->client, BT532_DELAY_RAW_FOR_HOST,
+			RAWDATA_DELAY_FOR_HOST) != I2C_SUCCESS)
+			zinitix_printk("Fail to set BT532_DELAY_RAW_FOR_HOST.\r\n");
+	}
+
+	if (write_reg(misc_info->client, BT532_TOUCH_MODE,
+			misc_info->touch_mode) != I2C_SUCCESS)
+		tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] TEST Mode : "
+				"Fail to set ZINITX_TOUCH_MODE %d.\r\n", misc_info->touch_mode);
+
+	/* clear garbage data */
+	for (i = 0; i < 10; i++) {
+		usleep_range(20 * 1000, 20 * 1000);
+		write_cmd(misc_info->client, BT532_CLEAR_INT_STATUS_CMD);
+	}
+
+	misc_info->work_state = NOTHING;
+	enable_irq(misc_info->irq);
+	up(&misc_info->work_lock);
+	return 1;
+}
 
 #if defined(SEC_FACTORY_TEST) || defined(USE_MISC_DEVICE)
 static int ts_upgrade_sequence(const u8 *firmware_data)
@@ -3938,7 +2630,7 @@ static int ts_upgrade_sequence(const u8 *firmware_data)
 #endif
 	clear_report_data(misc_info);
 
-	input_info(true, &misc_info->client->dev, "start upgrade firmware\n");
+	tsp_debug_info(true, &misc_info->client->dev, "start upgrade firmware\n");
 	if (ts_upgrade_firmware(misc_info,
 		firmware_data,
 		misc_info->cap_info.ic_fw_size) == false) {
@@ -3947,7 +2639,7 @@ static int ts_upgrade_sequence(const u8 *firmware_data)
 	}
 
 	if (ic_version_check(misc_info) < 0)
-			input_err(true, &misc_info->client->dev, "%s: failed ic version check\n", __func__);
+			tsp_debug_err(true, &misc_info->client->dev, "%s: failed ic version check\n", __func__);
 
 	if (ts_hw_calibration(misc_info) == false) {
 		ret = -1;
@@ -3963,7 +2655,7 @@ static int ts_upgrade_sequence(const u8 *firmware_data)
 #if ESD_TIMER_INTERVAL
 	esd_timer_start(CHECK_ESD_TIMER, misc_info);
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &misc_info->client->dev, "Started esd timer\n");
+	tsp_debug_info(true, &misc_info->client->dev, "Started esd timer\n");
 #endif
 #endif
 out:
@@ -4010,7 +2702,7 @@ static void fw_update(void *device_data)
 
 		ret = request_firmware(&tsp_fw, fw_path, &(client->dev));
 		if (ret) {
-			input_info(true, &client->dev,
+			tsp_debug_info(true, &client->dev,
 				"%s: Firmware image %s not available\n", __func__,
 				fw_path);
 			if (tsp_fw)
@@ -4035,7 +2727,7 @@ static void fw_update(void *device_data)
 		snprintf(fw_path, MAX_FW_PATH, "/sdcard/%s", TSP_FW_FILENAME);
 		fp = filp_open(fw_path, O_RDONLY, 0);
 		if (IS_ERR(fp)) {
-			input_err(true, &client->dev,
+			tsp_debug_err(true, &client->dev,
 				"file %s open error\n", fw_path);
 			info->factory_info->cmd_state = 3;
 			goto err_open;
@@ -4044,14 +2736,14 @@ static void fw_update(void *device_data)
 		fsize = fp->f_path.dentry->d_inode->i_size;
 
 		if(fsize != info->cap_info.ic_fw_size) {
-			input_err(true, &client->dev, "invalid fw size!!\n");
+			tsp_debug_err(true, &client->dev, "invalid fw size!!\n");
 			info->factory_info->cmd_state = 3;
 			goto err_open;
 		}
 
 		buff = kzalloc((size_t)fsize, GFP_KERNEL);
 		if (!buff) {
-			input_err(true, &client->dev, "failed to alloc buffer for fw\n");
+			tsp_debug_err(true, &client->dev, "failed to alloc buffer for fw\n");
 			info->factory_info->cmd_state = 3;
 			goto err_alloc;
 		}
@@ -4064,7 +2756,7 @@ static void fw_update(void *device_data)
 
 		filp_close(fp, current->files);
 		set_fs(old_fs);
-		input_info(true, &client->dev, "ums fw is loaded!!\n");
+		tsp_debug_info(true, &client->dev, "ums fw is loaded!!\n");
 
 		ret = ts_upgrade_sequence((u8*)buff);
 		if(ret<0) {
@@ -4075,7 +2767,7 @@ static void fw_update(void *device_data)
 		break;
 
 	default:
-		input_err(true, &client->dev, "invalid fw file type!!\n");
+		tsp_debug_err(true, &client->dev, "invalid fw file type!!\n");
 		goto not_support;
 	}
 
@@ -4117,7 +2809,7 @@ static void get_fw_ver_bin(void *device_data)
 
 	ret = request_firmware(&tsp_fw, fw_path, &(client->dev));
 	if (ret) {
-		input_info(true, &client->dev,
+		tsp_debug_info(true, &client->dev,
 			"%s: Firmware image %s not available\n", __func__,
 			fw_path);
 		goto fw_request_fail;
@@ -4143,7 +2835,7 @@ static void get_fw_ver_bin(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 fw_request_fail:
@@ -4173,7 +2865,7 @@ static void get_fw_ver_ic(void *device_data)
 	ret = ic_version_check(info);
 	up(&info->work_lock);
 	if (ret < 0) {
-		input_info(true, &client->dev, "%s: version check error\n", __func__);
+		tsp_debug_info(true, &client->dev, "%s: version check error\n", __func__);
 		return;
 	}
 
@@ -4193,38 +2885,11 @@ static void get_fw_ver_ic(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
 }
-
-#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-static void get_checksum_data(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	u16 checksum;
-
-	set_default_result(info);
-
-	read_data(client, ZT75XX_CHECKSUM, (u8 *)&checksum, 2);
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff),
-				"0x%X", checksum);
-	printk("%s %d %x\n",__func__,checksum,checksum);
-
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	return;
-}
-#endif
 
 static void get_threshold(void *device_data)
 {
@@ -4243,7 +2908,7 @@ static void get_threshold(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
@@ -4299,7 +2964,7 @@ static void get_chip_vendor(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
@@ -4327,7 +2992,7 @@ static void get_chip_name(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
@@ -4341,13 +3006,7 @@ static void get_x_num(void *device_data)
 
 	set_default_result(info);
 
-	//wakeup cmd
-	write_cmd(misc_info->client, 0x0A);
-	usleep_range(20 * 1000, 20 * 1000);
-	write_cmd(misc_info->client, 0x0A);
-	usleep_range(20 * 1000, 20 * 1000);
-
-	read_data(client, BT532_TOTAL_NUMBER_OF_X, (u8 *)&info->cap_info.x_node_num, 2);
+	read_data(client, BT532_TOTAL_NUMBER_OF_X, (u8 *)&info->cap_info.y_node_num, 2);
 
 	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff),
 				"%u", info->cap_info.x_node_num);
@@ -4355,7 +3014,7 @@ static void get_x_num(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
@@ -4369,12 +3028,6 @@ static void get_y_num(void *device_data)
 
 	set_default_result(info);
 
-	//wakeup cmd
-	write_cmd(misc_info->client, 0x0A);
-	usleep_range(20 * 1000, 20 * 1000);
-	write_cmd(misc_info->client, 0x0A);
-	usleep_range(20 * 1000, 20 * 1000);
-
 	read_data(client, BT532_TOTAL_NUMBER_OF_Y, (u8 *)&info->cap_info.y_node_num, 2);
 
 	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff),
@@ -4383,7 +3036,7 @@ static void get_y_num(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
@@ -4402,11 +3055,7 @@ static void not_support_cmd(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	info->factory_info->cmd_state = NOT_APPLICABLE;
 
-	mutex_lock(&finfo->cmd_lock);
-	finfo->cmd_is_running = false;
-	mutex_unlock(&finfo->cmd_lock);
-
-	input_info(true, &client->dev, "%s: \"%s(%d)\"\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: \"%s(%d)\"\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
@@ -4452,7 +3101,7 @@ static void run_dnd_read(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
 				(int)strlen(finfo->cmd_buff));
 
 #if ESD_TIMER_INTERVAL
@@ -4493,59 +3142,22 @@ static void get_dnd(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
-	return;
-}
-
-static void get_dnd_all_data(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	char all_cmdbuff[info->cap_info.x_node_num*info->cap_info.y_node_num*6];
-	s32 i,j;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	set_default_result(info);
-
-	ts_set_touchmode(TOUCH_DND_MODE);
-	get_raw_data(info, (u8 *)raw_data->dnd_data, 1);
-	ts_set_touchmode(TOUCH_POINT_MODE);
-
-	memset(all_cmdbuff,0,sizeof(char)*(info->cap_info.x_node_num*info->cap_info.y_node_num*6));	//size 6  ex(12000,)
-
-	for(i = 0; i < info->cap_info.x_node_num; i++) {
-		for(j = 0; j < info->cap_info.y_node_num; j++) {
-			sprintf(finfo->cmd_buff, "%u,", raw_data->dnd_data[i * info->cap_info.y_node_num + j]);
-			strcat(all_cmdbuff, finfo->cmd_buff);
-		}
-	}
-
-	set_cmd_result(info, all_cmdbuff,
-			strnlen(all_cmdbuff, sizeof(all_cmdbuff)));
-	finfo->cmd_state = OK;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
 	return;
 }
 
 static void run_dnd_v_gap_read(void *device_data)
 {
 	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct bt532_ts_platform_data *pdata = info->pdata;
 	struct i2c_client *client = info->client;
 	struct tsp_factory_info *finfo = info->factory_info;
 	struct tsp_raw_data *raw_data = info->raw_data;
 	int x_num = info->cap_info.x_node_num, y_num = info->cap_info.y_node_num;
 	int i, j, offset, val, cur_val, next_val;
-	u16 screen_max = 0x0000;
-	u16 touchkey_max = 0x0000;
+	u16 min = 0xFFFF;
+	u16 max = 0x0000;
 
 	set_default_result(info);
 
@@ -4574,26 +3186,18 @@ static void run_dnd_v_gap_read(void *device_data)
 
 			raw_data->vgap_data[offset] = val;
 
-			if(pdata->support_touchkey){
-				if(i < x_num - 2){
-					if(raw_data->vgap_data[i * y_num + j] > screen_max)
-						screen_max = raw_data->vgap_data[i * y_num + j];
-				}
-				else{
-					if(raw_data->vgap_data[i * y_num + j] > touchkey_max)
-						touchkey_max = raw_data->vgap_data[i * y_num + j];
-				}
-			}
-			else{
-				if(raw_data->vgap_data[i * y_num + j] > screen_max)
-						screen_max = raw_data->vgap_data[i * y_num + j];
-			}
+			if (raw_data->vgap_data[i * info->cap_info.y_node_num + j] < min)
+				min = raw_data->vgap_data[i * info->cap_info.y_node_num + j];
+
+			if (raw_data->vgap_data[i * info->cap_info.y_node_num + j] > max)
+				max = raw_data->vgap_data[i * info->cap_info.y_node_num + j];
 	}
 		printk("\n");
 }
 
-	input_info(true, &client->dev, "DND V Gap screen_max %d touchkey_max %d\n", screen_max, touchkey_max);
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", screen_max, touchkey_max);
+
+	tsp_debug_info(true, &client->dev, "DND V Gap min %d, max %d\n", min, max);
+	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "OK\n");
 
 	set_cmd_result(info, finfo->cmd_buff,
 			strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
@@ -4605,14 +3209,13 @@ static void run_dnd_v_gap_read(void *device_data)
 static void run_dnd_h_gap_read(void *device_data)
 {
 	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct bt532_ts_platform_data *pdata = info->pdata;
 	struct i2c_client *client = info->client;
 	struct tsp_factory_info *finfo = info->factory_info;
 	struct tsp_raw_data *raw_data = info->raw_data;
 	int x_num = info->cap_info.x_node_num, y_num = info->cap_info.y_node_num;
 	int i, j, offset, val, cur_val, next_val;
-	u16 screen_max = 0x0000;
-	u16 touchkey_max = 0x0000;
+	u16 min = 0xFFFF;
+	u16 max = 0x0000;
 
 	set_default_result(info);
 
@@ -4651,29 +3254,20 @@ static void run_dnd_h_gap_read(void *device_data)
 				val = 100 - ((next_val * 100) / cur_val);
 
 			printk("%d ", val);
+			cur_val = 10;
 
 			raw_data->hgap_data[offset] = val;
+			if (raw_data->hgap_data[i * info->cap_info.y_node_num + j] < min)
+				min = raw_data->hgap_data[i * info->cap_info.y_node_num + j];
 
-			if(pdata->support_touchkey){
-				if(i < x_num-1){
-					if(raw_data->hgap_data[i * y_num + j] > screen_max)
-						screen_max = raw_data->hgap_data[i * y_num + j];
-				}
-				else{
-					if(raw_data->hgap_data[i * y_num + j] > touchkey_max)
-						touchkey_max = raw_data->hgap_data[i * y_num + j];
-				}
-			}
-			else{
-				if(raw_data->hgap_data[i * y_num + j] > screen_max)
-						screen_max = raw_data->hgap_data[i * y_num + j];
-			}
+			if(raw_data->hgap_data[i * info->cap_info.y_node_num + j] > max)
+				max = raw_data->hgap_data[i * info->cap_info.y_node_num + j];
 		}
 		printk("\n");
 	}
 
-	input_info(true, &client->dev, "DND H Gap screen_max %d, touchkey_max %d\n", screen_max, touchkey_max);
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", screen_max, touchkey_max);
+	tsp_debug_info(true, &client->dev, "DND H Gap min %d, max %d\n", min, max);
+	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "OK\n");
 
 	set_cmd_result(info, finfo->cmd_buff,
 			strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
@@ -4709,7 +3303,7 @@ static void get_dnd_h_gap(void *device_data)
 	set_cmd_result(info, finfo->cmd_buff, strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &info->client->dev, "%s: %s(%d)\n", __func__,
+	tsp_debug_info(true, &info->client->dev, "%s: %s(%d)\n", __func__,
 			finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 }
 
@@ -4740,7 +3334,7 @@ static void get_dnd_v_gap(void *device_data)
 	set_cmd_result(info, finfo->cmd_buff, strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &info->client->dev, "%s: %s(%d)\n", __func__,
+	tsp_debug_info(true, &info->client->dev, "%s: %s(%d)\n", __func__,
 			finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 }
 
@@ -4785,7 +3379,7 @@ static void run_delta_read(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
 				(int)strlen(finfo->cmd_buff));
 #if ESD_TIMER_INTERVAL
 	esd_timer_start(CHECK_ESD_TIMER, misc_info);
@@ -4826,7 +3420,7 @@ static void get_delta(void *device_data)
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	info->factory_info->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
@@ -4847,25 +3441,25 @@ static void run_hfdnd_read(void *device_data)
 #endif
 	set_default_result(info);
 
-	ts_set_touchmode(TOUCH_DND_MODE);
+	ts_set_touchmode2(TOUCH_DND_MODE);
 	get_raw_data(info, (u8 *)raw_data->hfdnd_data, 2);
 	ts_set_touchmode(TOUCH_POINT_MODE);
 
-	input_info(true,&client->dev, "HF DND start\n");
+	tsp_debug_info(true,&client->dev, "HF DND start\n");
 
 	for (i = 0; i < x_num; i++) {
 		for (j = 0; j < y_num; j++) {
 			offset = (i * y_num) + j;
-			printk("%d ", raw_data->hfdnd_data[offset]);
+			tsp_debug_info(true,&client->dev, "%d ", raw_data->hfdnd_data[offset]);
 			if(raw_data->hfdnd_data[offset]<min && raw_data->hfdnd_data[offset]!=0)
 				min = raw_data->hfdnd_data[offset];
 			if(raw_data->hfdnd_data[offset]>max)
 				max = raw_data->hfdnd_data[offset];
 		}
-		printk("\n");
+		tsp_debug_info(true,&client->dev, "\n");
 	}
 
-	input_info(true, &client->dev, "HF DND Pass\n");
+	tsp_debug_info(true, &client->dev, "HF DND Pass\n");
 
 	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", min, max);
 	set_cmd_result(info, finfo->cmd_buff,
@@ -4910,1419 +3504,27 @@ static void get_hfdnd(void *device_data)
 	strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true,&client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
+	tsp_debug_info(true,&client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
 		(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 
 	return;
 }
 
-#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-static void run_rxshort_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	int y_num = info->cap_info.y_node_num;
-	int i, touchkey_node = 2;
-	u16 screen_max = 0x0000, touchkey_max = 0x0000;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	set_default_result(info);
-
-	ts_set_touchmode3(TOUCH_RXSHORT_MODE);
-	get_raw_data(info, (u8 *)raw_data->rxshort_data, 2);
-	ts_set_touchmode3(TOUCH_POINT_MODE);
-
-	input_info(true,&client->dev, "RX SHORT start\n");
-
-	for (i = 0; i < y_num; i++) {
-		input_info(true,&client->dev, "%d ", raw_data->rxshort_data[i]);
-
-		if((i==touchkey_node)||(i==(y_num-1)-touchkey_node)){
-			if(raw_data->rxshort_data[i]> touchkey_max)
-				touchkey_max = raw_data->rxshort_data[i];
-		}
-		else{
-			if(raw_data->rxshort_data[i]> screen_max)
-				screen_max = raw_data->rxshort_data[i];
-		}
+static void cover_set(struct bt532_ts_info *info){
+	if(g_cover_state == COVER_OPEN) {
+		mutex_lock(&info->set_reg_lock);
+		zinitix_bit_clr(m_optional_mode, DEF_OPTIONAL_MODE_SVIEW_DETECT_BIT);
+		mutex_unlock(&info->set_reg_lock);
 	}
-
-	input_info(true, &client->dev, "RX SHORT end\n");
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", screen_max, touchkey_max);
-	set_cmd_result(info, finfo->cmd_buff,
-			strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-static void get_rxshort(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	unsigned int val;
-	int x_node, y_node;
-	int node_num;
-
-	set_default_result(info);
-
-	x_node = finfo->cmd_param[0];
-	y_node = finfo->cmd_param[1];
-
-	if (x_node < 0 || x_node >= info->cap_info.x_node_num ||
-		y_node < 0 || y_node >= info->cap_info.y_node_num) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "abnormal");
-		set_cmd_result(info, finfo->cmd_buff,
-		strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		finfo->cmd_state = FAIL;
+	else if(g_cover_state == COVER_CLOSED) {
+		mutex_lock(&info->set_reg_lock);
+		zinitix_bit_set(m_optional_mode, DEF_OPTIONAL_MODE_SVIEW_DETECT_BIT);
+		mutex_unlock(&info->set_reg_lock);
+	}
+	if(info->work_state == SUSPEND || info->work_state == EALRY_SUSPEND || info->work_state == PROBE)
 		return;
-	}
-
-	node_num = x_node * info->cap_info.y_node_num + y_node;
-
-	val = raw_data->rxshort_data[node_num];
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", val);
-	set_cmd_result(info, finfo->cmd_buff,
-	strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true,&client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-		(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	return;
+	bt532_set_optional_mode(info, true);
 }
-
-static void run_txshort_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	int x_num = info->cap_info.x_node_num;
-	int i;
-	u16 screen_max = 0x0000, touchkey_max = 0x0000;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	set_default_result(info);
-
-	ts_set_touchmode3(TOUCH_TXSHORT_MODE);
-	get_raw_data(info, (u8 *)raw_data->txshort_data, 2);
-	ts_set_touchmode3(TOUCH_POINT_MODE);
-
-	input_info(true,&client->dev, "TX SHORT start\n");
-
-	for (i = 0; i < x_num-1; i++) {
-		input_info(true,&client->dev, "%d ", raw_data->txshort_data[i]);
-
-		if(raw_data->txshort_data[i]>screen_max)
-			screen_max = raw_data->txshort_data[i];
-	}
-	input_info(true,&client->dev, "%d ", raw_data->txshort_data[x_num-1]);
-	touchkey_max = raw_data->txshort_data[x_num-1];
-
-	input_info(true, &client->dev, "TX SHORT end\n");
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", screen_max, touchkey_max);
-	set_cmd_result(info, finfo->cmd_buff,
-			strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-static void get_txshort(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	unsigned int val;
-	int x_node, y_node;
-	int node_num;
-
-	set_default_result(info);
-
-	x_node = finfo->cmd_param[0];
-	y_node = finfo->cmd_param[1];
-
-	if (x_node < 0 || x_node >= info->cap_info.x_node_num ||
-		y_node < 0 || y_node >= info->cap_info.y_node_num) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "abnormal");
-		set_cmd_result(info, finfo->cmd_buff,
-		strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		finfo->cmd_state = FAIL;
-		return;
-	}
-
-	node_num = x_node * info->cap_info.y_node_num + y_node;
-
-	val = raw_data->txshort_data[node_num];
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", val);
-	set_cmd_result(info, finfo->cmd_buff,
-	strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true,&client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-		(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	return;
-}
-
-static void run_selfdnd_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	u16 min, max;
-	s32 j;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	set_default_result(info);
-
-	ts_set_touchmode(TOUCH_SELF_DND_MODE);
-	get_raw_data(info, (u8 *)raw_data->selfdnd_data, 1);
-	ts_set_touchmode(TOUCH_POINT_MODE);
-
-	input_info(true,&client->dev, "SELF DND start\n");
-	
-	min = 0xFFFF;
-	max = 0x0000;
-
-	for(j = 0; j < info->cap_info.y_node_num; j++) {
-		printk("%d ", raw_data->selfdnd_data[j]);
-
-		if (raw_data->selfdnd_data[j] < min && raw_data->selfdnd_data[j] != 0)
-			min = raw_data->selfdnd_data[j];
-
-		if(raw_data->selfdnd_data[j] > max)
-			max = raw_data->selfdnd_data[j];
-	}
-	printk("\n");
-	
-	input_info(true, &client->dev, "SELF DND Pass\n");
-	
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", min, max);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
-				(int)strlen(finfo->cmd_buff));
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-static void get_selfdnd(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	unsigned int val;
-	int x_node, y_node;
-
-	set_default_result(info);
-
-	x_node = finfo->cmd_param[0];
-	y_node = finfo->cmd_param[1];
-
-	if (x_node < 0 || x_node >= info->cap_info.x_node_num ||
-		y_node < 0 || y_node >= info->cap_info.y_node_num) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "abnormal");
-		set_cmd_result(info, finfo->cmd_buff,
-						strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		info->factory_info->cmd_state = FAIL;
-		return;
-	}
-
-	val = raw_data->selfdnd_data[y_node];
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", val);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	return;
-}
-
-static void run_selfdnd_h_gap_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	int y_num = info->cap_info.y_node_num;
-	int j, offset, val, cur_val, next_val;
-	u16 screen_max = 0x0000;
-
-	set_default_result(info);
-
-	memset(raw_data->self_hgap_data, 0x00, TSP_CMD_NODE_NUM);
-
-	printk("SELFDND H Gap start\n");
-
-	for (j = 0; j < y_num-1; j++) {
-		offset = j;
-		cur_val = raw_data->selfdnd_data[offset];
-		
-		if (!cur_val) {
-			raw_data->self_hgap_data[offset] = cur_val;
-			continue;
-		}
-
-		next_val = raw_data->selfdnd_data[offset + 1];
-
-		if (next_val > cur_val)
-			val = 100 - ((cur_val * 100) / next_val);
-		else
-			val = 100 - ((next_val * 100) / cur_val);
-
-		printk("%d ", val);
-
-		raw_data->self_hgap_data[offset] = val;
-
-		if(raw_data->self_hgap_data[j] > screen_max)
-			screen_max = raw_data->self_hgap_data[j];
-			
-	}
-	printk("\n");
-
-	input_info(true, &client->dev, "SELFDND H Gap screen_max %d\n", screen_max);
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d", screen_max);
-
-	set_cmd_result(info, finfo->cmd_buff,
-			strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	return;
-}
-
-static void get_selfdnd_h_gap(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	int x_node, y_node;
-	int x_num = info->cap_info.x_node_num;
-	int y_num = info->cap_info.y_node_num;
-
-	set_default_result(info);
-
-	x_node = finfo->cmd_param[0];
-	y_node = finfo->cmd_param[1];
-
-	if (x_node < 0 || x_node >= x_num ||
-		y_node < 0 || y_node >= y_num - 1) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "NG");
-		set_cmd_result(info, finfo->cmd_buff, strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		finfo->cmd_state = FAIL;
-		return;
-	}
-
-	sprintf(finfo->cmd_buff, "%d", raw_data->self_hgap_data[y_node]);
-	set_cmd_result(info, finfo->cmd_buff, strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &info->client->dev, "%s: %s(%d)\n", __func__,
-			finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-}
-
-static void run_jitter_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	u16 min, max;
-	s32 i,j;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	set_default_result(info);
-
-	if (write_reg(info->client, ZT75XX_JITTER_SAMPLING_CNT, 100) != I2C_SUCCESS)
-		input_info(true, &client->dev, "%s: Fail to set JITTER_CNT.\n", __func__);
-
-	ts_set_touchmode(TOUCH_JITTER_MODE);
-	get_raw_data(info, (u8 *)raw_data->jitter_data, 1);
-	ts_set_touchmode(TOUCH_POINT_MODE);
-
-	min = 0xFFFF;
-	max = 0x0000;
-
-	for(i = 0; i < info->cap_info.x_node_num; i++) {
-		for(j = 0; j < info->cap_info.y_node_num; j++) {
-			printk("%4d ", raw_data->jitter_data[i * info->cap_info.y_node_num + j]);
-
-			if (raw_data->jitter_data[i * info->cap_info.y_node_num + j] < min &&
-				raw_data->jitter_data[i * info->cap_info.y_node_num + j] != 0)
-				min = raw_data->jitter_data[i * info->cap_info.y_node_num + j];
-
-			if(raw_data->jitter_data[i * info->cap_info.y_node_num + j] > max)
-				max = raw_data->jitter_data[i * info->cap_info.y_node_num + j];
-		}
-		printk("\n");
-	}
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", min, max);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
-				(int)strlen(finfo->cmd_buff));
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-static void get_jitter(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	unsigned int val;
-	int x_node, y_node;
-	int node_num;
-
-	set_default_result(info);
-
-	x_node = finfo->cmd_param[0];
-	y_node = finfo->cmd_param[1];
-
-	if (x_node < 0 || x_node >= info->cap_info.x_node_num ||
-		y_node < 0 || y_node >= info->cap_info.y_node_num) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "abnormal");
-		set_cmd_result(info, finfo->cmd_buff,
-						strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		info->factory_info->cmd_state = FAIL;
-		return;
-	}
-
-	node_num = x_node * info->cap_info.y_node_num + y_node;
-
-	val = raw_data->jitter_data[node_num];
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", val);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	return;
-}
-
-#define I2C_BUFFER_SIZE 64
-static bool get_raw_data_size(struct bt532_ts_info *info, u8 *buff, int skip_cnt, int sz)
-{
-	struct bt532_ts_platform_data *pdata = info->pdata;
-	struct i2c_client *client = info->client;
-	int i;
-	u32 temp_sz;
-
-	disable_irq(info->irq);
-
-	down(&info->work_lock);
-	if (info->work_state != NOTHING) {
-		dev_err(&client->dev, "%s: other process occupied. (%d)\n",
-			__func__, info->work_state);
-		enable_irq(info->irq);
-		up(&info->work_lock);
-		return false;
-	}
-
-	info->work_state = RAW_DATA;
-
-	for (i = 0; i < skip_cnt; i++) {
-		while (gpio_get_value(pdata->gpio_int))
-			usleep_range(1 * 1000, 1 * 1000);
-
-		write_cmd(client, BT532_CLEAR_INT_STATUS_CMD);
-		usleep_range(1 * 1000, 1 * 1000);
-	}
-
-	while (gpio_get_value(pdata->gpio_int))
-		usleep_range(1 * 1000, 1 * 1000);
-
-	for (i = 0; sz > 0; i++) {
-		temp_sz = I2C_BUFFER_SIZE;
-
-		if (sz < I2C_BUFFER_SIZE)
-			temp_sz = sz;
-		if (read_raw_data(client, BT532_RAWDATA_REG + i,
-			(char *)(buff + (i * I2C_BUFFER_SIZE)), temp_sz) < 0) {
-
-			dev_err(&info->client->dev, "error : read zinitix tc raw data\n");
-			info->work_state = NOTHING;
-			enable_irq(info->irq);
-			up(&info->work_lock);
-			return false;
-		}
-		sz -= I2C_BUFFER_SIZE;
-	}
-
-	write_cmd(client, BT532_CLEAR_INT_STATUS_CMD);
-	info->work_state = NOTHING;
-	enable_irq(info->irq);
-	up(&info->work_lock);
-
-	return true;
-}
-
-static void run_reference_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	int min = 0xFFFF, max = 0x0000;
-	s32 i, j, touchkey_node = 2;
-	int buffer_offset;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	set_default_result(info);
-
-	ts_set_touchmode(TOUCH_REFERENCE_MODE);
-
-	get_raw_data_size(info, (u8 *)raw_data->reference_data, 2, info->cap_info.total_node_num*2 + info->cap_info.y_node_num + info->cap_info.x_node_num);
-	ts_set_touchmode(TOUCH_POINT_MODE);
-
-	input_info(true,&client->dev, "%s start\n",__func__);
-
-	for (i = 0; i < info->cap_info.x_node_num; i++) {
-		for (j = 0; j < info->cap_info.y_node_num; j++) {
-			printk("%d ", raw_data->reference_data[(i * info->cap_info.y_node_num) + j]);
-
-			if(i == (info->cap_info.x_node_num-1) && info->pdata->support_touchkey){
-				if((j==touchkey_node)||(j==(info->cap_info.y_node_num-1)-touchkey_node)){
-					if(raw_data->reference_data[(i * info->cap_info.y_node_num) + j] < min &&
-						raw_data->reference_data[(i * info->cap_info.y_node_num) + j] >= 0)
-						min = raw_data->reference_data[(i * info->cap_info.y_node_num) + j];
-
-					if(raw_data->reference_data[(i * info->cap_info.y_node_num) + j] > max)
-						max = raw_data->reference_data[(i * info->cap_info.y_node_num) + j];
-				}
-			}
-			else{
-				if(raw_data->reference_data[(i * info->cap_info.y_node_num) + j] < min &&
-					raw_data->reference_data[(i * info->cap_info.y_node_num) + j] >= 0)
-					min = raw_data->reference_data[(i * info->cap_info.y_node_num) + j];
-
-				if(raw_data->reference_data[(i * info->cap_info.y_node_num) + j] > max)
-					max = raw_data->reference_data[(i * info->cap_info.y_node_num) + j];
-			}
-		}
-		printk("\n");
-	}
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", min, max);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	buffer_offset = info->cap_info.total_node_num;
-	for (i = 0; i < info->cap_info.x_node_num; i++) {
-		dev_info(&info->client->dev, "%s: ref_data(mode1)[%2d] : ", client->name, i);
-		for (j = 0; j < info->cap_info.y_node_num; j++) {
-			printk(" %5d", raw_data->reference_data[buffer_offset + i * info->cap_info.y_node_num + j]);
-		}
-		printk("\n");
-	}
-	
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strlen(finfo->cmd_buff));
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-static void get_reference(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	unsigned int val;
-	int x_node, y_node;
-	int node_num;
-
-	set_default_result(info);
-
-	x_node = finfo->cmd_param[0];
-	y_node = finfo->cmd_param[1];
-
-	if (x_node < 0 || x_node >= info->cap_info.x_node_num ||
-		y_node < 0 || y_node >= info->cap_info.y_node_num) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "abnormal");
-		set_cmd_result(info, finfo->cmd_buff,
-						strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		info->factory_info->cmd_state = FAIL;
-
-		return;
-	}
-
-	node_num = x_node * info->cap_info.y_node_num + y_node;
-
-	val = raw_data->reference_data[node_num];
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", val);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	info->factory_info->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	return;
-}
-
-static void run_self_sat_dnd_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	u16 min, max;
-	s32 j;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	set_default_result(info);
-
-	ts_set_self_sat_touchmode(TOUCH_SELF_DND_MODE);
-	get_raw_data_size(info, (u8 *)raw_data->self_sat_dnd_data, 1, 32);
-	misc_info->touch_mode = TOUCH_POINT_MODE;
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
-	clear_report_data(info);
-	mini_init_touch(info);
-
-	input_info(true,&client->dev, "SELF SAT DND start\n");
-	
-	min = 0xFFFF;
-	max = 0x0000;
-
-	for(j = 0; j < info->cap_info.y_node_num; j++) {
-		printk("%d ", raw_data->self_sat_dnd_data[j]);
-
-		if (raw_data->self_sat_dnd_data[j] < min && raw_data->self_sat_dnd_data[j] != 0)
-			min = raw_data->self_sat_dnd_data[j];
-
-		if(raw_data->self_sat_dnd_data[j] > max)
-			max = raw_data->self_sat_dnd_data[j];
-	}
-	printk("\n");
-	
-	input_info(true, &client->dev, "SELF SAT DND Pass\n");
-	
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%d,%d\n", min, max);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
-				(int)strlen(finfo->cmd_buff));
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-static void get_self_sat_dnd(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	unsigned int val;
-	int x_node, y_node;
-
-	set_default_result(info);
-
-	x_node = finfo->cmd_param[0];
-	y_node = finfo->cmd_param[1];
-
-	if (x_node < 0 || x_node >= info->cap_info.x_node_num ||
-		y_node < 0 || y_node >= info->cap_info.y_node_num) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "abnormal");
-		set_cmd_result(info, finfo->cmd_buff,
-						strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		info->factory_info->cmd_state = FAIL;
-		return;
-	}
-
-	val = raw_data->self_sat_dnd_data[y_node];
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", val);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	return;
-}
-#endif
-
-#ifdef PAT_CONTROL
-static void run_tsp_rawdata_read(void *device_data, u16 rawdata_mode, s16* buff)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	int x_num = info->cap_info.x_node_num, y_num = info->cap_info.y_node_num;
-	int i, j;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-
-	ts_set_touchmode(rawdata_mode);
-	get_raw_data(info, (u8 *)buff, 2);
-	ts_set_touchmode(TOUCH_POINT_MODE);
-
-	input_info(true, &info->client->dev, "touch rawdata %d start\n", rawdata_mode);
-
-	for (i = 0; i < x_num; i++) {
-		printk("[%5d] :", i);
-		for (j = 0; j < y_num; j++) {
-			printk("%06d ", buff[(i * y_num) + j]);
-		}
-		printk("\n");
-	}
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-/*
-## Mis Cal result ##
-FD : spec out
-F3,F4 : i2c faile
-F2 : power off state
-F1 : not support mis cal concept
-F0 : initial value in function
-00 : pass
-*/
-#define DEF_MIS_CAL_SPEC_MIN 70
-#define DEF_MIS_CAL_SPEC_MAX 130
-static void run_mis_cal_read(void * device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct bt532_ts_platform_data *pdata = info->pdata;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	
-	int x_num = info->cap_info.x_node_num, y_num = info->cap_info.y_node_num;
-	int i, j, offset, val, x, y, node_num;
-	char mis_cal_data = 0xF0;
-	int ret = 0;
-	s16 raw_data_buff[TSP_CMD_NODE_NUM];
-	u16 chip_eeprom_info;
-	
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	disable_irq(info->irq);
-	set_default_result(info);
-
-	if (pdata->mis_cal_check == 0) {
-		input_info(true, &info->client->dev, "%s: [ERROR] not support\n", __func__);
-		mis_cal_data = 0xF1;
-		goto NG;
-	}
-
-	if (info->work_state == SUSPEND) {
-		input_info(true, &info->client->dev, "%s: [ERROR] Touch is stopped\n",__func__);
-		mis_cal_data = 0xF2;
-		goto NG;
-	}
-
-	if (read_data(info->client, BT532_EEPROM_INFO, (u8 *)&chip_eeprom_info, 2) < 0){
-		input_info(true, &info->client->dev, "%s: read eeprom_info i2c fail!\n", __func__);
-		mis_cal_data = 0xF3;
-		goto NG;
-	}
-
-	if (zinitix_bit_test(chip_eeprom_info, 0)){
-		input_info(true, &info->client->dev, "%s: eeprom cal 0, skip !\n", __func__);
-		mis_cal_data = 0xF1;
-		goto NG;
-	} 
-
-	ts_set_touchmode(TOUCH_REF_ABNORMAL_TEST_MODE);
-	ret = get_raw_data(info, (u8 *)raw_data->reference_data_abnormal, 2);
-	if (!ret) {
-		input_info(true, &info->client->dev, "%s:[ERROR] i2c fail!\n", __func__);
-		ts_set_touchmode(TOUCH_POINT_MODE);
-		mis_cal_data = 0xF4;
-		goto NG;
-	}
-	ts_set_touchmode(TOUCH_POINT_MODE);
-
-	input_info(true, &info->client->dev, "%s start\n", __func__);
-
-	ret = 1;
-	for (i = 0; i < x_num; i++) {
-		for (j = 0; j < y_num; j++) {
-			offset = (i * y_num) + j;
-			printk("%5d ", raw_data->reference_data_abnormal[offset]);
-
-			if( ret && (raw_data->reference_data_abnormal[offset] > DEF_MIS_CAL_SPEC_MAX 
-				||raw_data->reference_data_abnormal[offset] < DEF_MIS_CAL_SPEC_MIN)) {
-				val =  raw_data->reference_data_abnormal[offset];
-				x = i;
-				y = j;
-				node_num = offset;
-				mis_cal_data = 0xFD;
-				ret = 0;
-			}
-		}
-		printk("\n");
-	}
-	if(!ret)
-		goto NG;
-
-	mis_cal_data = 0x00;
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%X,%d,%d,%d", mis_cal_data, raw_data->reference_data_abnormal[0],
-			raw_data->reference_data_abnormal[1], raw_data->reference_data_abnormal[2]);
-
-	set_cmd_result(info, finfo->cmd_buff, strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
- 	input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
-				(int)strlen(finfo->cmd_buff));
-	enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-NG:
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%X,%d,%d,%d", mis_cal_data, 0, 0, 0);
-	if(mis_cal_data == 0xFD)
-	{
-		run_tsp_rawdata_read(device_data, 7, raw_data_buff);
-		run_tsp_rawdata_read(device_data, TOUCH_REFERENCE_MODE, raw_data_buff);
-	}
-	set_cmd_result(info, finfo->cmd_buff, strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = FAIL;
- 	input_info(true, &client->dev, "%s: \"%s\"(%d)\n", __func__, finfo->cmd_buff,
-				(int)strlen(finfo->cmd_buff));
-	enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-static void get_mis_cal(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct tsp_raw_data *raw_data = info->raw_data;
-	unsigned int val;
-	int x_node, y_node;
-	int node_num;
-
-	disable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	set_default_result(info);
-
-	x_node = finfo->cmd_param[0];
-	y_node = finfo->cmd_param[1];
-
-	if (x_node < 0 || x_node >= info->cap_info.x_node_num ||
-		y_node < 0 || y_node >= info->cap_info.y_node_num) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "abnormal");
-		set_cmd_result(info, finfo->cmd_buff,
-						strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		info->factory_info->cmd_state = FAIL;
-		enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-		esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-		return;
-	}
-
-	node_num = x_node * info->cap_info.y_node_num + y_node;
-
-	val = raw_data->reference_data_abnormal[node_num];
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", val);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-static void get_pat_information(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	u8 buff[6];
-
-	set_default_result(info);
-
-	get_tsp_nvm_data(info, PAT_CAL_COUNT, (u8 *)buff, 6);
-	/* length 6 : PAT_CAL_COUNT, PAT_FIX_VERSION_0, PAT_FIX_VERSION_1 */
-	input_info(true, &info->client->dev, "%s : %02x %02x %02x %02x %02x %02x", 
-					__func__, buff[0], buff[1], buff[2], buff[3], buff[4], buff[5]);
-
-	info->cap_info.cal_count = buff[0];
-	info->cap_info.tune_fix_ver = ((buff[4]<<8) | buff[2]);
-
-	input_info(true, &info->client->dev, "%s : P%02XT%04X", 
-					__func__, info->cap_info.cal_count, info->cap_info.tune_fix_ver);
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "P%02XT%04X", 
-				info->cap_info.cal_count, info->cap_info.tune_fix_ver);
-
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-	return;
-}
-
-/* FACTORY TEST RESULT SAVING FUNCTION
- * bit 3 ~ 0 : OCTA Assy
- * bit 7 ~ 4 : OCTA module
- * param[0] : OCTA module(1) / OCTA Assy(2)
- * param[1] : TEST NONE(0) / TEST FAIL(1) / TEST PASS(2) : 2 bit
- */
-static void get_tsp_test_result(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	u8 buff[2] = {0};
-
-	set_default_result(info);
-
-	get_tsp_nvm_data(info, PAT_TSP_TEST_DATA, (u8 *)buff, 2);
-	info->test_result.data[0] = buff[0];
-
-	input_info(true, &info->client->dev, "%s : %X", __func__, info->test_result.data[0]);
-
-	if (info->test_result.data[0] == 0xFF) {
-		input_info(true, &info->client->dev, "%s: clear factory_result as zero\n", __func__);
-		info->test_result.data[0] = 0;
-	}
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "M:%s, M:%d, A:%s, A:%d",
-			info->test_result.module_result == 0 ? "NONE" :
-				info->test_result.module_result == 1 ? "FAIL" : "PASS",
-			info->test_result.module_count,
-			info->test_result.assy_result == 0 ? "NONE" :
-				info->test_result.assy_result == 1 ? "FAIL" : "PASS",
-			info->test_result.assy_count);
-
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-}
-
-static void set_tsp_test_result(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	u8 buff[2] = {0};
-
-	set_default_result(info);
-
-	get_tsp_nvm_data(info, PAT_TSP_TEST_DATA, (u8 *)buff, 2);
-	info->test_result.data[0] = buff[0];
-
-	input_info(true, &info->client->dev, "%s : %X", __func__, info->test_result.data[0]);
-
-	if (info->test_result.data[0] == 0xFF) {
-		input_info(true, &info->client->dev, "%s: clear factory_result as zero\n", __func__);
-		info->test_result.data[0] = 0;
-	}
-
-	if (finfo->cmd_param[0] == TEST_OCTA_ASSAY) {
-		info->test_result.assy_result = finfo->cmd_param[1];
-		if (info->test_result.assy_count < 3)
-			info->test_result.assy_count++;
-
-	} else if (finfo->cmd_param[0] == TEST_OCTA_MODULE) {
-		info->test_result.module_result = finfo->cmd_param[1];
-		if (info->test_result.module_count < 3)
-			info->test_result.module_count++;
-	}
-
-	input_info(true, &info->client->dev, "%s: [0x%X] M:%s, M:%d, A:%s, A:%d\n",
-					__func__, info->test_result.data[0],
-					info->test_result.module_result == 0 ? "NONE" :
-						info->test_result.module_result == 1 ? "FAIL" : "PASS",
-					info->test_result.module_count,
-					info->test_result.assy_result == 0 ? "NONE" :
-						info->test_result.assy_result == 1 ? "FAIL" : "PASS",
-					info->test_result.assy_count);
-
-	set_tsp_nvm_data(info, PAT_TSP_TEST_DATA, &info->test_result.data[0], 1);
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "OK");
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-}
-
-#define DEF_IUM_ADDR_OFFSET		0xF0A0
-#define DEF_IUM_LOCK			0xF0F6
-#define DEF_IUM_UNLOCK			0xF0FA
-
-int get_tsp_nvm_data(struct bt532_ts_info *info, u8 addr, u8 *values, u16 length)
-{
-	struct i2c_client *client = info->client;
-	u16 buff_start;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	disable_irq(info->irq);
-
-	if (write_cmd(client, DEF_IUM_LOCK) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "failed ium lock\n");
-		goto fail_ium_random_read;
-	}
-	msleep(40);
-
-	buff_start = addr;	//custom setting address(0~62, 0,2,4,6)
-	//length = 2;		// custom setting(max 64)
-	if(length > TC_SECTOR_SZ)
-		length = TC_SECTOR_SZ;
-	if(length < 2){
-		length = 2;	//read 2byte
-	}
-
-	if (read_raw_data(client, buff_start + DEF_IUM_ADDR_OFFSET, 
-			values, length) < 0) {
-		input_err(true, &client->dev, "Failed to read raw data %d\n", length);
-		goto fail_ium_random_read;
-	}
-
-	if (write_cmd(client, DEF_IUM_UNLOCK) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "failed ium unlock\n");
-		goto fail_ium_random_read;
-	}
-	
-	enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return 0;
-
-fail_ium_random_read:
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
-
-	mini_init_touch(info);
-
-	enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return -1;
-}
-
-void set_tsp_nvm_data(struct bt532_ts_info *info, u8 addr, u8 *values, u16 length)
-{
-	struct i2c_client *client = info->client;
-	u8 buff[64];
-	u16 buff_start;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	disable_irq(info->irq);
-
-	if (write_cmd(client, DEF_IUM_LOCK) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "failed ium lock\n");
-		goto fail_ium_random_write;
-	}
-
-	buff_start = addr;	//custom setting address(0~62, 0,2,4,6)
-
-	memcpy((u8 *)&buff[buff_start], values, length);
-
-	/* data write start */
-	if(length > TC_SECTOR_SZ)
-		length = TC_SECTOR_SZ;
-	if(length < 2){
-		length = 2;	//write 2byte
-		buff[buff_start+1] = 0;
-	}
-	
-	if (write_data(client, buff_start + DEF_IUM_ADDR_OFFSET,
-			(u8 *)&buff[buff_start], length) < 0) {
-		input_err(true, &client->dev, "error : write zinitix tc firmare\n");
-		goto fail_ium_random_write;
-	}
-	/* data write end */
-
-	/* for save rom start */
-	if (write_reg(client, 0xc104, 0x0001) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "failed to write nvm wp disable\n");
-		goto fail_ium_random_write;
-	}
-	mdelay(10);
-
-	if (write_cmd(client, 0xF0F8) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "failed save ium\n");
-		goto fail_ium_random_write;
-	}
-	mdelay(30);
-
-	if (write_reg(client, 0xc104, 0x0000) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "nvm wp enable\n");
-		goto fail_ium_random_write;
-	}
-	mdelay(10);
-	/* for save rom end */
-
-	if (write_cmd(client, DEF_IUM_UNLOCK) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "failed ium unlock\n");
-		goto fail_ium_random_write;
-	}
-
-	enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	input_info(true, &client->dev, "%s end", __func__);
-	return;
-
-fail_ium_random_write:
-	if (write_reg(client, 0xc104, 0x0000) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "nvm wp enable\n");
-	}
-	mdelay(10);
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
-
-	mini_init_touch(info);
-
-	enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	return;
-}
-
-
-#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
-static void ium_random_write(struct bt532_ts_info *info, u8 data)
-{
-	struct i2c_client *client = info->client;
-	u8 buff[64]; // custom data buffer
-	u16 length, buff_start;
-
-#if ESD_TIMER_INTERVAL
-	esd_timer_stop(misc_info);
-#endif
-	disable_irq(info->irq);
-
-	input_info(true, &client->dev, "%s %x %d", __func__, data, data);
-
-	//for( i=0 ; i<64 ; i++)
-		buff[data] = data;
-		buff[data+1] = data;
-
-	buff_start = data;	//custom setting address(0~62)
-	length = 2;		// custom odd number setting(max 64)
-	if(length > TC_SECTOR_SZ)
-		length = TC_SECTOR_SZ;
-	if (write_data(client, buff_start + DEF_IUM_ADDR_OFFSET,
-			(u8 *)&buff[buff_start], length) < 0) {
-		input_err(true, &client->dev, "error : write zinitix tc firmare\n");
-		goto fail_ium_random_write;
-	}
-
-	if (write_reg(client, 0xc104, 0x0001) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "failed to write nvm wp disable\n");
-		goto fail_ium_random_write;
-	}
-	mdelay(10);
-
-	if (write_cmd(client, 0xF0F8) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "failed save ium\n");
-		goto fail_ium_random_write;
-	}
-	mdelay(30);
-
-	if (write_reg(client, 0xc104, 0x0000) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "nvm wp enable\n");
-	}
-	mdelay(10);
-
-	enable_irq(info->irq);
-#if ESD_TIMER_INTERVAL
-	esd_timer_start(CHECK_ESD_TIMER, misc_info);
-#endif
-	input_info(true, &client->dev, "%s %d", __func__, __LINE__);
-	return;
-
-fail_ium_random_write:
-	if (write_reg(client, 0xc104, 0x0000) != I2C_SUCCESS) {
-		input_err(true, &client->dev, "nvm wp enable\n");
-	}
-	mdelay(10);
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
-
-	enable_irq(info->irq);
-	return;
-}
-
-
-static void ium_random_read(struct bt532_ts_info *info, u8 data)
-{
-	struct i2c_client *client = info->client;
-	u8 buff[64]; // custom data buffer
-	u16 length, buff_start;
-
-	disable_irq(info->irq);
-
-	buff_start = 8;	//custom setting address(0~62)
-	length = 2;		// custom setting(max 64)
-	if(length > TC_SECTOR_SZ)
-		length = TC_SECTOR_SZ;
-
-	if (read_raw_data(client, data + DEF_IUM_ADDR_OFFSET, 
-			(u8 *)&buff[data], length) < 0) {
-		input_err(true, &client->dev, "Failed to read raw data %d\n", length);
-		goto fail_ium_random_read;
-	}
-	
-	enable_irq(info->irq);
-
-	input_info(true, &info->client->dev, "%s %x %d", __func__, buff[data], buff[data]);
-	
-	return;
-
-fail_ium_random_read:
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
-
-	enable_irq(info->irq);
-	return;
-}
-
-static void ium_r_write(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-
-	finfo->cmd_param[1] = finfo->cmd_param[0];
-
-	input_info(true, &info->client->dev, "%s %x %x", __func__, finfo->cmd_param[0], finfo->cmd_param[1]);
-
-	set_tsp_nvm_data(info, finfo->cmd_param[0], (u8 *)&finfo->cmd_param[0], 2);
-
-	set_default_result(info);
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "OK");
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-	return;
-
-	ium_random_write(info, finfo->cmd_param[0]);
-}
-
-static void ium_r_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	u8 val = finfo->cmd_param[0];
-
-	ium_random_read(info, val);
-
-	set_default_result(info);
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "OK");
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-	return;
-}
-
-static void ium_write(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	int i;
-	u8 temp[10];
-	u8 buff[64]; // custom data buffer
-	u8 val = finfo->cmd_param[0];
-
-	for( i=0 ; i<64 ; i++)
-		buff[i] = val;
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON);
-
-	write_reg(client, 0xC000, 0x0001);
-	write_reg(client, 0xC004, 0x0001);
-
-	for( i=0 ; i<16 ; i++)
-	{
-		temp[0] = i;
-		temp[1] = 0x00;
-		temp[2] = buff[i*4];
-		temp[3] = buff[i*4+1];
-		temp[4] = buff[i*4+2];
-		temp[5] = buff[i*4+3];
-		write_data(client, 0xC020, temp, 6);
-	}
-
-	write_reg(client, 0xC003, 0x0001);
-	temp[0] = 0x00;
-	temp[1] = 0x00;
-	temp[2] = 0x01;
-	temp[3] = 0x00;
-	write_data(client, 0xC10D, temp, 4);
-	mdelay(5);
-
-	temp[0] = 0x10;
-	temp[1] = 0x00;
-	temp[2] = 0x00;
-	temp[3] = 0x00;
-	temp[4] = 0x00;
-	temp[5] = 0x20;
-	temp[6] = 0xe0;
-	temp[7] = 0x00;
-	temp[8] = 0x00;
-	temp[9] = 0x40;
-	write_data(client, 0xC10B, temp, 10);
-	msleep(5);
-
-	write_reg(client, 0xC003, 0x0000);
-	msleep(5);
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
-	mini_init_touch(info);
-
-	set_default_result(info);
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "OK");
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	return;
-}
-
-static void ium_read(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	int i;
-	u8 temp[8];
-	u8 buff[64]; // custom data buffer
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON);
-
-	write_reg(client, 0xC000, 0x0001);
-
-	temp[0] = 0x0C;
-	temp[1] = 0x00;
-	temp[2] = 0x02;
-	temp[3] = 0x20;
-	temp[4] = 0x03;
-	temp[5] = 0x00;
-	temp[6] = 0x00;
-	temp[7] = 0x00;
-	write_data(client, 0xCC02, temp, 8);
-
-	for( i=0 ; i<16 ; i++)
-	{
-		temp[0] = i*4;
-		temp[1] = 0x00;
-		temp[2] = 0x00;
-		temp[3] = 0x20;
-		write_data(client, 0xCC01, temp, 4);
-		read_data_only(client, buff + i*4, 4);
-	}
-	temp[0] = 0x0C;
-	temp[1] = 0x00;
-	temp[2] = 0x02;
-	temp[3] = 0x20;
-	temp[4] = 0x02;
-	temp[5] = 0x00;
-	temp[6] = 0x00;
-	temp[7] = 0x00;
-	write_data(client, 0xCC02, temp, 8);
-	msleep(5);
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
-	mini_init_touch(info);
-
-	for( i=63 ; i>0 ; i-=4) {
-		input_info(true, &client->dev, "%s: [%2d]:%02X %02X %02X %02X\n",
-							__func__, i, buff[i], buff[i-1], buff[i-2], buff[i-3]);
-	}
-
-	set_default_result(info);
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "OK");
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	return;
-	
-}
-#endif
-#endif
 
 static void clear_cover_mode(void *device_data)
 {
@@ -6331,34 +3533,14 @@ static void clear_cover_mode(void *device_data)
 	int arg = finfo->cmd_param[0];
 
 	set_default_result(info);
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", (unsigned int) arg);
+	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u",
+							(unsigned int) arg);
 
-	if (finfo->cmd_param[0] < 0 || finfo->cmd_param[0] > 3) {
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "NG");
-		finfo->cmd_state = FAIL;
-	} else {
-		if (finfo->cmd_param[0] > 1) {
-			info->flip_enable = true;
-			info->cover_type = finfo->cmd_param[1];
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-			if(TRUSTEDUI_MODE_TUI_SESSION & trustedui_get_current_mode()){
-				msleep(100);
-				tui_force_close(1);
-				msleep(200);
-				if(TRUSTEDUI_MODE_TUI_SESSION & trustedui_get_current_mode()){
-					trustedui_clear_mask(TRUSTEDUI_MODE_VIDEO_SECURED|TRUSTEDUI_MODE_INPUT_SECURED);
-					trustedui_set_mode(TRUSTEDUI_MODE_OFF);
-				}
-			}
-#endif // CONFIG_TRUSTONIC_TRUSTED_UI		
-		} else {
-			info->flip_enable = false;
-		}
+	g_cover_state = arg;
 
-		set_cover_type(info, info->flip_enable);
+	cover_set(info);
 
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "OK");
-	}
+	tsp_debug_info(true, &info->client->dev, "COVER state = %d\n", g_cover_state);
 	set_cmd_result(info, finfo->cmd_buff,
 					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	mutex_lock(&finfo->cmd_lock);
@@ -6383,7 +3565,7 @@ static void clear_reference_data(void *device_data)
 	write_reg(client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0);
 #endif
 
-	write_reg(client, BT532_EEPROM_INFO, 0xffff);
+	write_reg(client, BT532_EEPROM_INFO_REG, 0xffff);
 
 	write_reg(client, 0xc003, 0x0001);
 	write_reg(client, 0xc104, 0x0001);
@@ -6401,13 +3583,13 @@ static void clear_reference_data(void *device_data)
 		SCAN_RATE_HZ * ESD_TIMER_INTERVAL);
 	esd_timer_start(CHECK_ESD_TIMER, info);
 #endif
-	input_info(true, &client->dev, "%s: TSP clear calibration bit\n", __func__);
+	tsp_debug_info(true, &client->dev, "%s: TSP clear calibration bit\n", __func__);
 
 	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "OK");
 	set_cmd_result(info, finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__,
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__,
 			finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	return;
 }
@@ -6418,56 +3600,19 @@ static void run_ref_calibration(void *device_data)
 	struct i2c_client *client = info->client;
 	struct tsp_factory_info *finfo = info->factory_info;
 	int i;
-#ifdef PAT_CONTROL
-	u16 pdata_pat_function;
-#endif
 
 	set_default_result(info);
-
-	if(info->finger_cnt1 != 0){
-		input_info(true, &client->dev, "%s: return (finger cnt %d)\n", __func__, info->finger_cnt1);
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "NG");
-		set_cmd_result(info, finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		finfo->cmd_state = FAIL;
-		return;
-	}
-
-	disable_irq(info->irq);
 
 #if ESD_TIMER_INTERVAL
 	esd_timer_stop(info);
 	write_reg(client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0);
 #endif
 
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
+	if (ts_hw_calibration(info) == true)
+		tsp_debug_info(true, &client->dev, "%s: TSP calibration Pass\n", __func__);
+	else
+		tsp_debug_info(true, &client->dev, "%s: TSP calibration Fail\n", __func__);
 
-#ifdef PAT_CONTROL
-	input_info(true, &client->dev, "%s: pat_function=%d afe_base=%04X cal_count=%X tune_fix_ver=%04X\n", 
-					__func__, info->pdata->pat_function, info->pdata->afe_base, info->cap_info.cal_count, info->cap_info.tune_fix_ver);
-	pdata_pat_function = info->pdata->pat_function;
-	info->pdata->pat_function = PAT_CONTROL_FORCE_CMD;
-#endif
-	if (ts_hw_calibration(info) == true){
-		input_info(true, &client->dev, "%s: TSP calibration Pass\n", __func__);
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "OK");
-		set_cmd_result(info, finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		finfo->cmd_state = OK;
-	}
-	else{
-		input_info(true, &client->dev, "%s: TSP calibration Fail\n", __func__);
-		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "NG");
-		set_cmd_result(info, finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-		finfo->cmd_state = FAIL;
-	}
-
-	bt532_power_control(info, POWER_OFF);
-	bt532_power_control(info, POWER_ON_SEQUENCE);
-	mini_init_touch(info);
-
-#ifdef PAT_CONTROL
-	info->pdata->pat_function = pdata_pat_function;
-#endif
 	for (i = 0; i < 5; i++) {
 		write_cmd(client, BT532_CLEAR_INT_STATUS_CMD);
 		usleep_range(10, 10);
@@ -6479,8 +3624,11 @@ static void run_ref_calibration(void *device_data)
 	esd_timer_start(CHECK_ESD_TIMER, info);
 #endif
 
-	enable_irq(info->irq);
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__,
+	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "OK");
+	set_cmd_result(info, finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
+	finfo->cmd_state = OK;
+
+	tsp_debug_info(true, &client->dev, "%s: %s(%d)\n", __func__,
 			finfo->cmd_buff, (int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	return;
 }
@@ -6495,9 +3643,9 @@ static void dead_zone_enable(void *device_data)
 	set_default_result(info);
 
 	if(val) //normal
-		zinitix_bit_clr(m_optional_mode.select_mode.flag, DEF_OPTIONAL_MODE_EDGE_SELECT);
+		zinitix_bit_clr(m_optional_mode, DEF_OPTIONAL_MODE_EDGE_SELECT);
 	else //factory
-		zinitix_bit_set(m_optional_mode.select_mode.flag, DEF_OPTIONAL_MODE_EDGE_SELECT);
+		zinitix_bit_set(m_optional_mode, DEF_OPTIONAL_MODE_EDGE_SELECT);
 
 	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff),
 			"dead_zone %s", val ? "disable" : "enable");
@@ -6505,138 +3653,7 @@ static void dead_zone_enable(void *device_data)
 			(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
 	finfo->cmd_state = OK;
 
-	input_info(true, &client->dev, "%s, %s\n", __func__, finfo->cmd_buff);
-
-	return;
-}
-
-static void spay_enable(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct i2c_client *client = info->client;
-	int val = finfo->cmd_param[0];
-
-	set_default_result(info);
-
-	if(val) {
-		info->spay_enable = 1;
-		zinitix_bit_set(lpm_mode_reg.flag, BIT_EVENT_SPAY);
-	}else {
-		info->spay_enable = 0;
-		zinitix_bit_clr(lpm_mode_reg.flag, BIT_EVENT_SPAY);
-	}
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff),
-			"spay_enable %s", val ? "enable" : "disable");
-	set_cmd_result(info, finfo->cmd_buff,
-			(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	mutex_lock(&finfo->cmd_lock);
-	finfo->cmd_is_running = false;
-	mutex_unlock(&finfo->cmd_lock);
-
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s, %s\n", __func__, finfo->cmd_buff);
-
-	return;
-}
-
-static void aod_enable(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct i2c_client *client = info->client;
-	int val = finfo->cmd_param[0];
-
-	set_default_result(info);
-
-	if(val) {
-		info->aod_enable = 1;
-		zinitix_bit_set(lpm_mode_reg.flag, BIT_EVENT_AOD);
-	}else {
-		info->aod_enable = 0;
-		zinitix_bit_clr(lpm_mode_reg.flag, BIT_EVENT_AOD);
-	}
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff),
-			"aod_enable %s", val ? "enable" : "disable");
-	set_cmd_result(info, finfo->cmd_buff,
-			(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	mutex_lock(&finfo->cmd_lock);
-	finfo->cmd_is_running = false;
-	mutex_unlock(&finfo->cmd_lock);
-
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s, %s\n", __func__, finfo->cmd_buff);
-
-	return;
-}
-
-static void set_aod_rect(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct tsp_factory_info *finfo = info->factory_info;
-	struct i2c_client *client = info->client;
-
-	set_default_result(info);
-
-	input_info(true, &info->client->dev, "%s: w:%d, h:%d, x:%d, y:%d\n",
-			__func__, finfo->cmd_param[0], finfo->cmd_param[1],
-			finfo->cmd_param[2], finfo->cmd_param[3]);
-
-	write_cmd(info->client, 0x0A);
-	write_reg(info->client, ZT75XX_SET_AOD_W_REG, (u16)finfo->cmd_param[0]);
-	write_reg(info->client, ZT75XX_SET_AOD_H_REG, (u16)finfo->cmd_param[1]);
-	write_reg(info->client, ZT75XX_SET_AOD_X_REG, (u16)finfo->cmd_param[2]);
-	write_reg(info->client, ZT75XX_SET_AOD_Y_REG, (u16)finfo->cmd_param[3]);
-	write_cmd(info->client, 0x0B);
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%s", "OK");
-	set_cmd_result(info, finfo->cmd_buff,
-			(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-
-	mutex_lock(&finfo->cmd_lock);
-	finfo->cmd_is_running = false;
-	mutex_unlock(&finfo->cmd_lock);
-
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s, %s\n", __func__, finfo->cmd_buff);
-
-	return;
-}
-
-static void get_wet_mode(void *device_data)
-{
-	struct bt532_ts_info *info = (struct bt532_ts_info *)device_data;
-	struct i2c_client *client = info->client;
-	struct tsp_factory_info *finfo = info->factory_info;
-	u16 temp;
-
-	set_default_result(info);
-	
-	down(&info->work_lock);
-	read_data(client, BT532_DEBUG_REG, (u8 *)&temp, 2);
-	up(&info->work_lock);
-
-	input_info(true, &client->dev, "%s, %x\n", __func__, temp);
-
-	if(zinitix_bit_test(temp, DEF_DEVICE_STATUS_WATER_MODE))
-		temp = true;
-	else
-		temp = false;
-
-	snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "%u", temp);
-	set_cmd_result(info, finfo->cmd_buff,
-					strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
-	finfo->cmd_state = OK;
-
-	input_info(true, &client->dev, "%s: %s(%d)\n", __func__, finfo->cmd_buff,
-				(int)strnlen(finfo->cmd_buff, sizeof(finfo->cmd_buff)));
+	dev_info(&client->dev, "%s(), %s\n", __func__, finfo->cmd_buff);
 
 	return;
 }
@@ -6655,18 +3672,19 @@ static ssize_t store_cmd(struct device *dev, struct device_attribute
 	bool cmd_found = false;
 	int param_cnt = 0;
 
-	if (strlen(buf) >= TSP_CMD_STR_LEN) {		
-		input_err(true, &client->dev, "%s: cmd length is over (%s,%d)!!\n", __func__, buf, (int)strlen(buf));
+    	if (strlen(buf) >= TSP_CMD_STR_LEN) {
+		dev_err(&client->dev, "%s: cmd length is over (%s,%d)!!\n", __func__, buf, (int)strlen(buf));
+		return -EINVAL;
+	}
+
+	if (count >= (unsigned int)TSP_CMD_STR_LEN) {
+		dev_err(&client->dev, "%s: cmd length(count) is over (%d,%s)!!\n",
+				__func__, (unsigned int)count, buf);
 		return -EINVAL;
 	}
 
 	if (finfo->cmd_is_running == true) {
-		input_err(true, &client->dev, "%s: other cmd is running\n", __func__);
-		goto err_out;
-	}
-
-	if (strlen(buf) >= TSP_CMD_STR_LEN) {		
-		input_err(true, &client->dev, "%s: cmd length is over (%s,%d)!!\n", __func__, buf, (int)strlen(buf));
+		tsp_debug_err(true, &client->dev, "%s: other cmd is running\n", __func__);
 		goto err_out;
 	}
 
@@ -6729,9 +3747,9 @@ static ssize_t store_cmd(struct device *dev, struct device_attribute
 		} while ((cur - buf <= len) && (param_cnt < TSP_CMD_PARAM_NUM));
 	}
 
-	input_info(true, &client->dev, "cmd = %s\n", tsp_cmd_ptr->cmd_name);
+	tsp_debug_info(true, &client->dev, "cmd = %s\n", tsp_cmd_ptr->cmd_name);
 /*	for (i = 0; i < param_cnt; i++)
-		input_info(true, &client->dev, "cmd param %d= %d\n", i, finfo->cmd_param[i]);*/
+		tsp_debug_info(true, &client->dev, "cmd param %d= %d\n", i, finfo->cmd_param[i]);*/
 
 	tsp_cmd_ptr->cmd_func(info);
 
@@ -6746,7 +3764,7 @@ static ssize_t show_cmd_status(struct device *dev,
 	struct i2c_client *client = info->client;
 	struct tsp_factory_info *finfo = info->factory_info;
 
-	input_info(true, &client->dev, "tsp cmd: status:%d\n", finfo->cmd_state);
+	tsp_debug_info(true, &client->dev, "tsp cmd: status:%d\n", finfo->cmd_state);
 
 	if (finfo->cmd_state == WAITING)
 		snprintf(finfo->cmd_buff, sizeof(finfo->cmd_buff), "WAITING");
@@ -6774,7 +3792,7 @@ static ssize_t show_cmd_result(struct device *dev, struct device_attribute
 	struct i2c_client *client = info->client;
 	struct tsp_factory_info *finfo = info->factory_info;
 
-	input_info(true, &client->dev, "tsp cmd: result: %s\n", finfo->cmd_result);
+	tsp_debug_info(true, &client->dev, "tsp cmd: result: %s\n", finfo->cmd_result);
 
 	mutex_lock(&finfo->cmd_lock);
 	finfo->cmd_is_running = false;
@@ -6786,119 +3804,14 @@ static ssize_t show_cmd_result(struct device *dev, struct device_attribute
 					"%s\n", finfo->cmd_result);
 }
 
-static ssize_t scrub_position_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-	struct i2c_client *client = info->client;
-	char buff[256] = { 0 };
-
-	input_info(true, &client->dev, "%s: scrub_id: %d, X:%d, Y:%d \n", __func__,
-				info->scrub_id, info->scrub_x, info->scrub_y);
-
-	snprintf(buff, sizeof(buff), "%d %d %d", info->scrub_id, info->scrub_x, info->scrub_y);
-
-	info->scrub_id = 0;
-	return snprintf(buf, PAGE_SIZE, "%s", buff);
-}
-
 static DEVICE_ATTR(cmd, S_IWUSR | S_IWGRP, NULL, store_cmd);
 static DEVICE_ATTR(cmd_status, S_IRUGO, show_cmd_status, NULL);
 static DEVICE_ATTR(cmd_result, S_IRUGO, show_cmd_result, NULL);
-static DEVICE_ATTR(scrub_pos, S_IRUGO, scrub_position_show, NULL);
-
-static ssize_t read_ito_check_show(struct device *dev, 
-					struct device_attribute *devattr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-
-	input_info(true, &info->client->dev, "%s: %02X%02X%02X%02X\n", __func__,
-				info->ito_test[0], info->ito_test[1],
-				info->ito_test[2], info->ito_test[3]);
-
-	return snprintf(buf, PAGE_SIZE, "%02X%02X%02X%02X",
-					info->ito_test[0], info->ito_test[1],
-					info->ito_test[2], info->ito_test[3]);
-}
-
-static ssize_t read_raw_check_show(struct device *dev, 
-					struct device_attribute *devattr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-	
-	input_info(true, &info->client->dev, "%s\n", __func__);
-	return snprintf(buf, PAGE_SIZE, "OK");
-}
-
-static ssize_t read_multi_count_show(struct device *dev, 
-					struct device_attribute *devattr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-	char buffer[256]= { 0 };
-
-	input_info(true, &info->client->dev, "%s: %d\n", __func__, info->multi_count);
-	snprintf(buffer, sizeof(buffer), "%d", info->multi_count);
-	info->multi_count = 0;
-
-	return snprintf(buf, PAGE_SIZE, "%s\n", buffer);
-}
-
-static ssize_t read_wet_mode_show(struct device *dev, 
-					struct device_attribute *devattr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-	char buffer[256]= { 0 };
-
-	input_info(true, &info->client->dev, "%s: %d\n", __func__, info->wet_count);
-	snprintf(buffer, sizeof(buffer), "%d", info->wet_count);
-	info->wet_count = 0;
-
-	return snprintf(buf, PAGE_SIZE, "%s\n", buffer);
-}
-
-static ssize_t read_comm_err_count_show(struct device *dev, 
-					struct device_attribute *devattr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-	char buffer[256]= { 0 };
-
-	input_info(true, &info->client->dev, "%s: %d\n", __func__, info->comm_err_count);
-	snprintf(buffer, sizeof(buffer), "%d", info->comm_err_count);
-	info->comm_err_count = 0;
-
-	return snprintf(buf, PAGE_SIZE, "%s\n", buffer);
-}
-
-static ssize_t read_module_id_show(struct device *dev, 
-					struct device_attribute *devattr, char *buf)
-{
-	struct bt532_ts_info *info = dev_get_drvdata(dev);
-
-	input_info(true, &info->client->dev, "%s\n", __func__);
-
-	return snprintf(buf, PAGE_SIZE, "ZI%02X%02x%02X%04X\n",
-					info->cap_info.reg_data_version, info->test_result.data[0],
-					info->cap_info.cal_count, info->cap_info.tune_fix_ver);
-}
-
-static DEVICE_ATTR(ito_check, S_IRUGO, read_ito_check_show, NULL);
-static DEVICE_ATTR(raw_check, S_IRUGO, read_raw_check_show, NULL);
-static DEVICE_ATTR(multi_count, S_IRUGO, read_multi_count_show, NULL);
-static DEVICE_ATTR(wet_mode, S_IRUGO, read_wet_mode_show, NULL);
-static DEVICE_ATTR(comm_err_count, S_IRUGO, read_comm_err_count_show, NULL);
-static DEVICE_ATTR(module_id, S_IRUGO, read_module_id_show, NULL);
 
 static struct attribute *touchscreen_attributes[] = {
 	&dev_attr_cmd.attr,
 	&dev_attr_cmd_status.attr,
 	&dev_attr_cmd_result.attr,
-	&dev_attr_scrub_pos.attr,
-	&dev_attr_ito_check.attr,
-	&dev_attr_raw_check.attr,
-	&dev_attr_multi_count.attr,
-	&dev_attr_wet_mode.attr,
-	&dev_attr_comm_err_count.attr,
-	&dev_attr_module_id.attr,
 	NULL,
 };
 
@@ -6916,12 +3829,12 @@ static ssize_t show_touchkey_threshold(struct device *dev,
 	read_data(client, BT532_BUTTON_SENSITIVITY, (u8 *)&cap->key_threshold, 2);
 
 #ifdef NOT_SUPPORTED_TOUCH_DUMMY_KEY
-	input_info(true, &client->dev, "%s: key threshold = %d\n", __func__, cap->key_threshold);
+	tsp_debug_info(true, &client->dev, "%s: key threshold = %d\n", __func__, cap->key_threshold);
 
 	return snprintf(buf, 41, "%d", cap->key_threshold);
 #else
 	read_data(client, BT532_DUMMY_BUTTON_SENSITIVITY, (u8 *)&cap->dummy_threshold, 2);
-	input_info(true, &client->dev, "%s: key threshold = %d %d %d %d\n", __func__,
+	tsp_debug_info(true, &client->dev, "%s: key threshold = %d %d %d %d\n", __func__,
 			cap->dummy_threshold, cap->key_threshold, cap->key_threshold, cap->dummy_threshold);
 
 	return snprintf(buf, 41, "%d %d %d %d", cap->dummy_threshold,
@@ -6946,7 +3859,7 @@ static ssize_t show_touchkey_sensitivity(struct device *dev,
 	else if (!strcmp(attr->attr.name, "touchkey_back"))
 		i = 1;
 	else {
-		input_err(true, &client->dev, "%s: Invalid attribute\n",__func__);
+		tsp_debug_err(true, &client->dev, "%s: Invalid attribute\n",__func__);
 
 		goto err_out;
 	}
@@ -6965,22 +3878,20 @@ static ssize_t show_touchkey_sensitivity(struct device *dev,
 	else if (!strcmp(attr->attr.name, "touchkey_dummy_btn6"))
 		i = 5;
 	else {
-		input_err(true, &client->dev, "%s: Invalid attribute\n",__func__);
+		tsp_debug_err(true, &client->dev, "%s: Invalid attribute\n",__func__);
 
 		goto err_out;
 	}
 #endif
-	down(&info->work_lock);
 	ret = read_data(client, BT532_BTN_WIDTH + i, (u8*)&val, 2);
-	up(&info->work_lock);
 	if (ret < 0) {
-		input_err(true, &client->dev, "%s: Failed to read %d's key sensitivity\n",
+		tsp_debug_err(true, &client->dev, "%s: Failed to read %d's key sensitivity\n",
 					 __func__,i);
 
 		goto err_out;
 	}
 
-	input_info(true, &client->dev, "%s: %d's key sensitivity = %d\n",
+	tsp_debug_info(true, &client->dev, "%s: %d's key sensitivity = %d\n",
 				__func__, i, val);
 
 	return snprintf(buf, 6, "%d", val);
@@ -7001,6 +3912,7 @@ static ssize_t show_menu_key_raw_data(struct device *dev,
 	return 0;
 }
 
+#ifdef CONFIG_TOUCHKEY_LED
 static ssize_t touch_led_control(struct device *dev, struct device_attribute *attr, const char *buf, size_t size)
 {
 	struct bt532_ts_info *info = dev_get_drvdata(dev);
@@ -7014,21 +3926,21 @@ static ssize_t touch_led_control(struct device *dev, struct device_attribute *at
 	if(pdata->regulator_tkled){
 		regulator_led = regulator_get(NULL, pdata->regulator_tkled);
 		if (IS_ERR(regulator_led)) {
-			input_err(true, dev, "%s: Failed to get regulator_led.\n", __func__);
+			tsp_debug_err(true, dev, "%s: Failed to get regulator_led.\n", __func__);
 			goto out_led_control;
 		}
 
-		input_info(true, &info->client->dev, "[TKEY] %s : %d _ %d\n",__func__,data,__LINE__);
+		tsp_debug_info(true, &info->client->dev, "[TKEY] %s : %d _ %d\n",__func__,data,__LINE__);
 
 		if (data) {
 			retval = regulator_enable(regulator_led);
 			if (retval)
-				input_err(true, dev, "%s: Failed to enable regulator_led: %d\n", __func__, retval);
+				tsp_debug_err(true, dev, "%s: Failed to enable regulator_led: %d\n", __func__, retval);
 		} else {
 			if (regulator_is_enabled(regulator_led)){
 				retval = regulator_disable(regulator_led);
 				if (retval)
-					input_err(true, dev, "%s: Failed to disable regulator_led: %d\n", __func__, retval);
+					tsp_debug_err(true, dev, "%s: Failed to disable regulator_led: %d\n", __func__, retval);
 			}
 		}
 
@@ -7038,6 +3950,7 @@ static ssize_t touch_led_control(struct device *dev, struct device_attribute *at
 
 	return size;
 }
+#endif /* CONFIG_TOUCHKEY_LED */
 
 static DEVICE_ATTR(touchkey_threshold, S_IRUGO, show_touchkey_threshold, NULL);
 static DEVICE_ATTR(touchkey_recent, S_IRUGO, show_touchkey_sensitivity, NULL);
@@ -7054,7 +3967,9 @@ static DEVICE_ATTR(touchkey_dummy_btn6, S_IRUGO,
 #endif
 static DEVICE_ATTR(touchkey_raw_back, S_IRUGO, show_back_key_raw_data, NULL);
 static DEVICE_ATTR(touchkey_raw_menu, S_IRUGO, show_menu_key_raw_data, NULL);
+#ifdef CONFIG_TOUCHKEY_LED
 static DEVICE_ATTR(brightness, 0664, NULL, touch_led_control);
+#endif
 
 static struct attribute *touchkey_attributes[] = {
 	&dev_attr_touchkey_threshold.attr,
@@ -7068,82 +3983,13 @@ static struct attribute *touchkey_attributes[] = {
 	&dev_attr_touchkey_dummy_btn4.attr,
 	&dev_attr_touchkey_dummy_btn6.attr,
 #endif
+#ifdef CONFIG_TOUCHKEY_LED
 	&dev_attr_brightness.attr,
+#endif 
 	NULL,
 };
 static struct attribute_group touchkey_attr_group = {
 	.attrs = touchkey_attributes,
-};
-
-static struct tsp_cmd tsp_cmds[] = {
-	{TSP_CMD("fw_update", fw_update),},
-	{TSP_CMD("get_fw_ver_bin", get_fw_ver_bin),},
-	{TSP_CMD("get_fw_ver_ic", get_fw_ver_ic),},
-#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-	{TSP_CMD("get_checksum_data", get_checksum_data),},
-#endif
-	{TSP_CMD("get_threshold", get_threshold),},
-	{TSP_CMD("module_off_master", module_off_master),},
-	{TSP_CMD("module_on_master", module_on_master),},
-	{TSP_CMD("module_off_slave", module_off_slave),},
-	{TSP_CMD("module_on_slave", module_on_slave),},
-	{TSP_CMD("get_module_vendor", get_module_vendor),},
-	{TSP_CMD("get_chip_vendor", get_chip_vendor),},
-	{TSP_CMD("get_chip_name", get_chip_name),},
-	{TSP_CMD("get_x_num", get_x_num),},
-	{TSP_CMD("get_y_num", get_y_num),},
-
-	/* vendor dependant command */
-	{TSP_CMD("run_delta_read", run_delta_read),},
-	{TSP_CMD("get_delta_all_data", get_delta),},
-	{TSP_CMD("run_dnd_read", run_dnd_read),},
-	{TSP_CMD("get_dnd", get_dnd),},
-	{TSP_CMD("get_dnd_all_data", get_dnd_all_data),},
-	{TSP_CMD("run_dnd_v_gap_read", run_dnd_v_gap_read),},
-	{TSP_CMD("get_dnd_v_gap", get_dnd_v_gap),},
-	{TSP_CMD("run_dnd_h_gap_read", run_dnd_h_gap_read),},
-	{TSP_CMD("get_dnd_h_gap", get_dnd_h_gap),},
-	{TSP_CMD("run_hfdnd_read", run_hfdnd_read),},
-	{TSP_CMD("get_hfdnd", get_hfdnd),},
-#ifdef CONFIG_TOUCHSCREEN_ZINITIX_ZT75XX
-	{TSP_CMD("run_rxshort_read", run_rxshort_read),},
-	{TSP_CMD("get_rxshort", get_rxshort),},
-	{TSP_CMD("run_txshort_read", run_txshort_read),},
-	{TSP_CMD("get_txshort", get_txshort),},
-	{TSP_CMD("run_selfdnd_read", run_selfdnd_read),},
-	{TSP_CMD("get_selfdnd", get_selfdnd),},
-	{TSP_CMD("run_selfdnd_h_gap_read", run_selfdnd_h_gap_read),},
-	{TSP_CMD("get_selfdnd_h_gap", get_selfdnd_h_gap),},
-	{TSP_CMD("run_self_sat_dnd_read", run_self_sat_dnd_read),},
-	{TSP_CMD("get_self_sat_dnd", get_self_sat_dnd),},
-	{TSP_CMD("run_jitter_read", run_jitter_read),},
-	{TSP_CMD("get_jitter", get_jitter),},
-	{TSP_CMD("run_reference_read", run_reference_read),},
-	{TSP_CMD("get_reference", get_reference),},
-#endif
-#ifdef PAT_CONTROL
-	{TSP_CMD("run_mis_cal_read", run_mis_cal_read),},
-	{TSP_CMD("get_mis_cal", get_mis_cal),},
-	{TSP_CMD("get_pat_information", get_pat_information),},
-	{TSP_CMD("get_tsp_test_result", get_tsp_test_result),},
-	{TSP_CMD("set_tsp_test_result", set_tsp_test_result),},
-#ifndef CONFIG_SAMSUNG_PRODUCT_SHIP
-	{TSP_CMD("ium_write", ium_write),},
-	{TSP_CMD("ium_read", ium_read),},
-	{TSP_CMD("ium_r_write", ium_r_write),},
-	{TSP_CMD("ium_r_read", ium_r_read),},
-#endif
-#endif
-	{TSP_CMD("run_force_calibration", run_ref_calibration),},
-	{TSP_CMD("clear_reference_data", clear_reference_data),},
-	{TSP_CMD("run_ref_calibration", run_ref_calibration),},
-	{TSP_CMD("dead_zone_enable", dead_zone_enable),},
-	{TSP_CMD("clear_cover_mode", clear_cover_mode),},
-	{TSP_CMD("spay_enable", spay_enable),},
-	{TSP_CMD("aod_enable", aod_enable),},
-	{TSP_CMD("set_aod_rect", set_aod_rect),},
-	{TSP_CMD("get_wet_mode", get_wet_mode),},
-	{TSP_CMD("not_support_cmd", not_support_cmd),},
 };
 
 static int init_sec_factory(struct bt532_ts_info *info)
@@ -7158,7 +4004,7 @@ static int init_sec_factory(struct bt532_ts_info *info)
 
 	factory_info = kzalloc(sizeof(struct tsp_factory_info), GFP_KERNEL);
 	if (unlikely(!factory_info)) {
-		input_err(true, &info->client->dev, "%s: Failed to allocate memory\n",
+		tsp_debug_err(true, &info->client->dev, "%s: Failed to allocate memory\n",
 				__func__);
 		ret = -ENOMEM;
 
@@ -7166,7 +4012,7 @@ static int init_sec_factory(struct bt532_ts_info *info)
 	}
 	raw_data = kzalloc(sizeof(struct tsp_raw_data), GFP_KERNEL);
 	if (unlikely(!raw_data)) {
-		input_err(true, &info->client->dev, "%s: Failed to allocate memory\n",
+		tsp_debug_err(true, &info->client->dev, "%s: Failed to allocate memory\n",
 				__func__);
 		ret = -ENOMEM;
 
@@ -7177,40 +4023,42 @@ static int init_sec_factory(struct bt532_ts_info *info)
 	for(i = 0; i < ARRAY_SIZE(tsp_cmds); i++)
 		list_add_tail(&tsp_cmds[i].list, &factory_info->cmd_list_head);
 
-	factory_ts_dev = sec_device_create(0, info, "tsp");
+	
+	factory_ts_dev = sec_device_create((dev_t)(uintptr_t)&factory_ts_dev, info, "tsp");
 	if (unlikely(!factory_ts_dev)) {
-		input_err(true, &info->client->dev, "Failed to create factory dev\n");
+		tsp_debug_err(true, &info->client->dev, "Failed to create factory dev\n");
 		ret = -ENODEV;
 		goto err_create_device;
 	}
 
 	if(pdata->support_touchkey){
-		factory_tk_dev = sec_device_create(0, info, "sec_touchkey");
+		factory_tk_dev = sec_device_create((dev_t)(uintptr_t)&factory_tk_dev, info, "sec_touchkey");
 		if (IS_ERR(factory_tk_dev)) {
-			input_err(true, &info->client->dev, "Failed to create factory dev\n");
+			tsp_debug_err(true, &info->client->dev, "Failed to create factory dev\n");
 			ret = -ENODEV;
 			goto err_create_device;
 		}
 	}
-
 	ret = sysfs_create_group(&factory_ts_dev->kobj, &touchscreen_attr_group);
 	if (unlikely(ret)) {
-		input_err(true, &info->client->dev, "Failed to create touchscreen sysfs group\n");
+		tsp_debug_err(true, &info->client->dev, "Failed to create touchscreen sysfs group\n");
 		goto err_create_sysfs;
 	}
 
+#if 1
 	ret = sysfs_create_link(&factory_ts_dev->kobj,
 		&info->input_dev->dev.kobj, "input");
 
 	if (ret < 0) {
-		input_err(true, &info->client->dev, "%s: Failed to create link\n", __func__);
+		tsp_debug_err(true, &info->client->dev, "%s: Failed to create link\n", __func__);
 		goto err_create_sysfs;
 	}
+#endif
 
 	if(pdata->support_touchkey){
 		ret = sysfs_create_group(&factory_tk_dev->kobj, &touchkey_attr_group);
 		if (unlikely(ret)) {
-			input_err(true, &info->client->dev, "Failed to create touchkey sysfs group\n");
+			tsp_debug_err(true, &info->client->dev, "Failed to create touchkey sysfs group\n");
 			goto err_create_sysfs;
 		}
 	}
@@ -7248,6 +4096,7 @@ static int ts_misc_fops_close(struct inode *inode, struct file *filp)
 static long ts_misc_fops_ioctl(struct file *filp,
 	unsigned int cmd, unsigned long arg)
 {
+	void __user *argp = (void __user *)arg;
 	struct raw_ioctl raw_ioctl;
 	u8 *u8Data;
 	int ret = 0;
@@ -7258,7 +4107,6 @@ static long ts_misc_fops_ioctl(struct file *filp,
 	struct reg_ioctl reg_ioctl;
 	u16 val;
 	int nval = 0;
-	void __user *argp = compat_ptr(arg);
 
 	if (misc_info == NULL)
 	{
@@ -7276,14 +4124,14 @@ static long ts_misc_fops_ioctl(struct file *filp,
 
 	case TOUCH_IOCTL_SET_DEBUGMSG_STATE:
 		if (copy_from_user(&nval, argp, 4)) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\n");
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\n");
 			return -1;
 		}
 		if (nval)
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] on debug mode (%d)\n",
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] on debug mode (%d)\n",
 				nval);
 		else
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] off debug mode (%d)\n",
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] off debug mode (%d)\n",
 				nval);
 		m_ts_debug_mode = nval;
 		break;
@@ -7310,9 +4158,9 @@ static long ts_misc_fops_ioctl(struct file *filp,
 		if (copy_from_user(&sz, argp, sizeof(size_t)))
 			return -1;
 
-		//input_info(true, &misc_info->client->dev, KERN_INFO "[zinitix_touch]: firmware size = %d\r\n", sz);
+		//tsp_debug_info(true, &misc_info->client->dev, KERN_INFO "[zinitix_touch]: firmware size = %d\r\n", sz);
 		if (misc_info->cap_info.ic_fw_size != sz) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch]: firmware size error\r\n");
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch]: firmware size error\r\n");
 			return -1;
 		}
 		break;
@@ -7324,7 +4172,7 @@ static long ts_misc_fops_ioctl(struct file *filp,
 
 		version = (u16) (m_firmware_data[52] | (m_firmware_data[53]<<8));
 
-		input_info(true, &misc_info->client->dev, "[zinitix_touch]: firmware version = %x\r\n", version);
+		tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch]: firmware version = %x\r\n", version);
 
 		if (copy_to_user(argp, &version, sizeof(version)))
 			return -1;
@@ -7368,7 +4216,7 @@ static long ts_misc_fops_ioctl(struct file *filp,
 		disable_irq(misc_info->irq);
 		down(&misc_info->work_lock);
 		if (misc_info->work_state != NOTHING) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch]: other process occupied.. (%d)\r\n",
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch]: other process occupied.. (%d)\r\n",
 				misc_info->work_state);
 			up(&misc_info->work_lock);
 			return -1;
@@ -7383,7 +4231,7 @@ static long ts_misc_fops_ioctl(struct file *filp,
 		mode = misc_info->touch_mode;
 		if (write_reg(misc_info->client,
 			BT532_TOUCH_MODE, mode) != I2C_SUCCESS) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch]: failed to set touch mode %d.\n",
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch]: failed to set touch mode %d.\n",
 				mode);
 			goto fail_hw_cal;
 		}
@@ -7408,7 +4256,7 @@ fail_hw_cal:
 			return -1;
 		}
 		if (copy_from_user(&nval, argp, 4)) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\r\n");
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\r\n");
 			misc_info->work_state = NOTHING;
 			return -1;
 		}
@@ -7423,7 +4271,7 @@ fail_hw_cal:
 		}
 		down(&misc_info->work_lock);
 		if (misc_info->work_state != NOTHING) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch]:other process occupied.. (%d)\n",
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch]:other process occupied.. (%d)\n",
 				misc_info->work_state);
 			up(&misc_info->work_lock);
 			return -1;
@@ -7435,20 +4283,20 @@ fail_hw_cal:
 			argp, sizeof(struct reg_ioctl))) {
 			misc_info->work_state = NOTHING;
 			up(&misc_info->work_lock);
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\n");
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\n");
 			return -1;
 		}
 
 		if (read_data(misc_info->client,
-			(u16)reg_ioctl.addr, (u8 *)&val, 2) < 0)
+			reg_ioctl.addr, (u8 *)&val, 2) < 0)
 			ret = -1;
 
 		nval = (int)val;
 
-		if (copy_to_user(compat_ptr(reg_ioctl.val), (u8 *)&nval, 4)) {
+		if (copy_to_user(reg_ioctl.val, (u8 *)&nval, 4)) {
 			misc_info->work_state = NOTHING;
 			up(&misc_info->work_lock);
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_to_user\n");
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_to_user\n");
 			return -1;
 		}
 
@@ -7463,7 +4311,7 @@ fail_hw_cal:
 
 		down(&misc_info->work_lock);
 		if (misc_info->work_state != NOTHING) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch]: other process occupied.. (%d)\n",
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch]: other process occupied.. (%d)\n",
 				misc_info->work_state);
 			up(&misc_info->work_lock);
 			return -1;
@@ -7474,19 +4322,19 @@ fail_hw_cal:
 				argp, sizeof(struct reg_ioctl))) {
 			misc_info->work_state = NOTHING;
 			up(&misc_info->work_lock);
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user(1)\n");
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\n");
 			return -1;
 		}
 
-		if (copy_from_user(&val, compat_ptr(reg_ioctl.val), 4)) {
+		if (copy_from_user(&val, reg_ioctl.val, 4)) {
 			misc_info->work_state = NOTHING;
 			up(&misc_info->work_lock);
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user(2)\n");
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\n");
 			return -1;
 		}
 
 		if (write_reg(misc_info->client,
-			(u16)reg_ioctl.addr, val) != I2C_SUCCESS)
+			reg_ioctl.addr, val) != I2C_SUCCESS)
 			ret = -1;
 
 		zinitix_debug_msg("write : reg addr = 0x%x, val = 0x%x\r\n",
@@ -7503,7 +4351,7 @@ fail_hw_cal:
 		}
 		down(&misc_info->work_lock);
 		if (misc_info->work_state != NOTHING) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch]: other process occupied.. (%d)\r\n",
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch]: other process occupied.. (%d)\r\n",
 				misc_info->work_state);
 			up(&misc_info->work_lock);
 			return -1;
@@ -7527,7 +4375,7 @@ fail_hw_cal:
 		}
 		down(&misc_info->work_lock);
 		if (misc_info->work_state != NOTHING) {
-			input_info(true, &misc_info->client->dev, "[zinitix_touch]: other process occupied.." \
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch]: other process occupied.." \
 				"(%d)\r\n", misc_info->work_state);
 			up(&misc_info->work_lock);
 			return -1;
@@ -7566,7 +4414,7 @@ fail_hw_cal:
 		if (copy_from_user(&raw_ioctl,
 			argp, sizeof(struct raw_ioctl))) {
 			up(&misc_info->raw_data_lock);
-			input_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\r\n");
+			tsp_debug_info(true, &misc_info->client->dev, "[zinitix_touch] error : copy_from_user\r\n");
 			return -1;
 		}
 
@@ -7575,7 +4423,7 @@ fail_hw_cal:
 		u8Data = (u8 *)&misc_info->cur_data[0];
 		if(raw_ioctl.sz > MAX_TRAW_DATA_SZ*2)
 			raw_ioctl.sz = MAX_TRAW_DATA_SZ*2;
-		if (copy_to_user(compat_ptr(raw_ioctl.buf), (u8 *)u8Data,
+		if (copy_to_user(raw_ioctl.buf, (u8 *)u8Data,
 			raw_ioctl.sz)) {
 			up(&misc_info->raw_data_lock);
 			return -1;
@@ -7591,14 +4439,14 @@ fail_hw_cal:
 }
 #endif
 
-#ifdef CONFIG_OF
+#ifdef USE_PIN_CTRL
 static int bt532_pinctrl_configure(struct bt532_ts_info *info, bool active)
 {
 	struct device *dev = &info->client->dev;
 	struct pinctrl_state *pinctrl_state;
 	int retval = 0;
 
-	input_dbg(true, dev, "%s: pinctrl %d\n", __func__, active);
+	tsp_debug_dbg(true, dev, "%s: pinctrl %d\n", __func__, active);
 
 	if (active)
 		pinctrl_state = pinctrl_lookup_state(info->pinctrl, "on_state");
@@ -7606,23 +4454,44 @@ static int bt532_pinctrl_configure(struct bt532_ts_info *info, bool active)
 		pinctrl_state = pinctrl_lookup_state(info->pinctrl, "off_state");
 
 	if (IS_ERR(pinctrl_state)) {
-		input_err(true, dev, "%s: Failed to lookup pinctrl.\n", __func__);
+		tsp_debug_err(true, dev, "%s: Failed to lookup pinctrl.\n", __func__);
 	} else {
 		retval = pinctrl_select_state(info->pinctrl, pinctrl_state);
 		if (retval)
-			input_err(true, dev, "%s: Failed to configure pinctrl.\n", __func__);
+			tsp_debug_err(true, dev, "%s: Failed to configure pinctrl.\n", __func__);
 	}
 	return 0;
 }
+#endif
 
-static int bt532_power_ctrl(void *data, bool on)
+static int bt532_gpio_power_ctrl(void *data, bool on)
+{
+	struct bt532_ts_info* info = (struct bt532_ts_info*)data;
+
+	if (info->tsp_pwr_enabled == on)
+		return 0;
+
+	tsp_debug_info(true, &info->client->dev, "%s: %s\n", __func__, on ? "on" : "off");
+	
+	gpio_set_value(info->pdata->gpio_en, on);
+
+	info->tsp_pwr_enabled = on;
+
+	return 0;
+}
+
+
+static int bt532_ldo_power_ctrl(void *data, bool on)
 {
 	struct bt532_ts_info* info = (struct bt532_ts_info*)data;
 	struct bt532_ts_platform_data *pdata = info->pdata;
 	struct device *dev = &info->client->dev;
 	struct regulator *regulator_dvdd = NULL;
-	struct regulator *regulator_avdd = NULL;
+	struct regulator *regulator_avdd;
 	int retval = 0;
+	
+	
+	//To Do : Needs to be updated!
 
 	if (info->tsp_pwr_enabled == on)
 		return retval;
@@ -7630,83 +4499,48 @@ static int bt532_power_ctrl(void *data, bool on)
 	if (!pdata->gpio_ldo_en) {
 		regulator_dvdd = regulator_get(NULL, pdata->regulator_dvdd);
 		if (IS_ERR(regulator_dvdd)) {
-			input_err(true, dev, "%s: Failed to get %s regulator.\n",
+			tsp_debug_err(true, dev, "%s: Failed to get %s regulator.\n",
 				 __func__, pdata->regulator_dvdd);
 			return PTR_ERR(regulator_dvdd);
 		}
 	}
-	if(pdata->regulator_avdd){
-		regulator_avdd = regulator_get(NULL, pdata->regulator_avdd);
-		if (IS_ERR(regulator_avdd)) {
-		input_err(true, dev, "%s: Failed to get %s regulator.\n",
-				 __func__, pdata->regulator_avdd);
-			return PTR_ERR(regulator_avdd);
-		}
+	regulator_avdd = regulator_get(NULL, pdata->regulator_avdd);
+	if (IS_ERR(regulator_avdd)) {
+		tsp_debug_err(true, dev, "%s: Failed to get %s regulator.\n",
+			 __func__, pdata->regulator_avdd);
+		return PTR_ERR(regulator_avdd);
 	}
 
-	input_info(true, dev, "%s: %s\n", __func__, on ? "on" : "off");
+	tsp_debug_info(true, dev, "%s: %s\n", __func__, on ? "on" : "off");
 
 	if (on) {
-		if(regulator_avdd){
-			retval = regulator_enable(regulator_avdd);
+		retval = regulator_enable(regulator_avdd);
+		if (retval) {
+			tsp_debug_err(true, dev, "%s: Failed to enable avdd: %d\n", __func__, retval);
+			return retval;
+		}
+		if (!pdata->gpio_ldo_en) {
+			retval = regulator_enable(regulator_dvdd);
 			if (retval) {
-			input_err(true, dev, "%s: Failed to enable avdd: %d\n", __func__, retval);
+				tsp_debug_err(true, dev, "%s: Failed to enable vdd: %d\n", __func__, retval);
 				return retval;
 			}
 		}
-		
-		if (!pdata->gpio_ldo_en) {
-			if(regulator_dvdd){
-				retval = regulator_enable(regulator_dvdd);
-				if (retval) {
-				input_err(true, dev, "%s: Failed to enable vdd: %d\n", __func__, retval);
-					return retval;
-				}
-			}
-		}
-		
-		if(pdata->gpio_vdd)
-			gpio_set_value(pdata->gpio_vdd, true);
-		
 	} else {
 		if (!pdata->gpio_ldo_en) {
-			if(regulator_dvdd){
-				if (regulator_is_enabled(regulator_dvdd))
-					regulator_disable(regulator_dvdd);
-			}
+			if (regulator_is_enabled(regulator_dvdd))
+				regulator_disable(regulator_dvdd);
 		}
-		
-		if(regulator_avdd){
-			if (regulator_is_enabled(regulator_avdd))
-				regulator_disable(regulator_avdd);
-		}
-		
-		if(pdata->gpio_vdd)
-			gpio_set_value(pdata->gpio_vdd, false);	
+		if (regulator_is_enabled(regulator_avdd))
+			regulator_disable(regulator_avdd);
 	}
 
 	info->tsp_pwr_enabled = on;
 	if (!pdata->gpio_ldo_en)
 		regulator_put(regulator_dvdd);
-	if(regulator_avdd)
-		regulator_put(regulator_avdd);
+	regulator_put(regulator_avdd);
 
 	return retval;
-}
-
-
-static int zinitix_init_gpio(struct bt532_ts_platform_data *pdata)
-{
-	int ret = 0;
-
-	ret = gpio_request(pdata->gpio_int, "zinitix_tsp_irq");
-	if(ret) {
-		pr_err("[TSP]%s: unable to request zinitix_tsp_irq [%d]\n",
-			__func__, pdata->gpio_int);
-		return ret;
-	}
-
-	return ret;
 }
 
 static int bt532_ts_probe_dt(struct device_node *np,
@@ -7714,7 +4548,76 @@ static int bt532_ts_probe_dt(struct device_node *np,
 			 struct bt532_ts_platform_data *pdata)
 {
 	int ret = 0;
-	u32 temp;
+	u32 temp;	
+	
+	pr_info("[TSP]: %s:%d\n", __func__, __LINE__);
+	
+	if (of_get_property(np, "zinitix,power-gpioen", NULL)) {
+		pdata->gpio_en = of_get_named_gpio(np, "zinitix,power-gpio", 0);
+		if (pdata->gpio_en < 0) {
+			pr_err("%s: of_get_named_gpio failed: tsp_gpio %d\n", __func__,
+				pdata->gpio_en);
+			return pdata->gpio_en;
+		}			
+		if (gpio_is_valid(pdata->gpio_en)) {
+			ret = gpio_request(pdata->gpio_en, "zinitix,power-enable");
+			if(ret < 0){
+				pr_err("unable to request gpio_en\n");
+				return ret;
+			}
+			
+			ret = gpio_direction_output(pdata->gpio_en, 0);
+			if (ret) {
+				pr_err("%s: unable to set direction for gpio [%d]\n",
+						__func__, pdata->gpio_en);
+			}
+		}
+		
+		pdata->tsp_power = bt532_gpio_power_ctrl;
+	}
+	else
+	{		
+		// TO DO : Check for appropriate property name & add
+		if (of_property_read_string(np, "zinitix,regulator_avdd", &pdata->regulator_avdd)) {
+			tsp_debug_err(true, dev, "Failed to get regulator_avdd name property\n");
+			return -EINVAL;
+		}
+		
+		if (of_get_property(np, "zinitix,gpio_ldo_en", NULL)) {
+				pdata->gpio_ldo_en = true;
+		} else {
+			if (of_property_read_string(np, "zinitix,regulator_dvdd", &pdata->regulator_dvdd)) {
+				tsp_debug_err(true, dev, "Failed to get regulator_dvdd name property\n");
+				return -EINVAL;
+			}
+		}	
+
+		pdata->tsp_power = bt532_ldo_power_ctrl;
+	}	
+	
+	pdata->gpio_int = of_get_named_gpio(np, "zinitix,irq-gpio", 0);
+	if (pdata->gpio_int < 0) {
+		pr_err("%s: of_get_named_gpio failed: tsp_gpio %d\n", __func__,
+			pdata->gpio_int);
+		return -EINVAL;
+	}
+	else
+	{		
+		if (gpio_is_valid(pdata->gpio_int)) {
+			ret = gpio_request(pdata->gpio_int, "zinitix,irq-gpio");
+			if(ret < 0){
+				pr_err(
+					"unable to request gpio_int\n");
+				return ret;
+			}
+			
+			ret = gpio_direction_input(pdata->gpio_int);
+			if (ret) {
+				pr_err("%s: unable to set direction for gpio [%d]\n",
+						__func__, pdata->gpio_int);
+			}
+		}
+	}	
 
 	ret = of_property_read_u32(np, "zinitix,x_resolution", &temp);
 	if (ret) {
@@ -7736,43 +4639,7 @@ static int bt532_ts_probe_dt(struct device_node *np,
 		return ret;
 	} else
 		pdata->page_size = (u16) temp;
-
-	pdata->gpio_int = of_get_named_gpio(np, "zinitix,irq_gpio", 0);
-	if (pdata->gpio_int < 0) {
-		pr_err("%s: of_get_named_gpio failed: tsp_gpio %d\n", __func__,
-			pdata->gpio_int);
-		return -EINVAL;
-	}
-
-	if (of_get_property(np, "zinitix,gpio_ldo_en", NULL)) {
-			pdata->gpio_ldo_en = true;
-	} else {
-		if (of_property_read_string(np, "zinitix,regulator_dvdd", &pdata->regulator_dvdd)) {
-			input_err(true, dev, "Failed to get regulator_dvdd name property\n");
-			return -EINVAL;
-		}
-	}
-	if (of_property_read_string(np, "zinitix,regulator_avdd", &pdata->regulator_avdd)) {
-		input_err(true, dev, "Failed to get regulator_avdd name property\n");
-		pdata->regulator_avdd = NULL;
-	}
-	pdata->gpio_vdd = of_get_named_gpio(np, "zinitix,vdd_en", 0);
-	if (!gpio_is_valid(pdata->gpio_vdd)){
-		input_err(true, dev, "Failed to get vdd_en gpio\n");
-		pdata->gpio_vdd = 0;
-	}else{
-		ret = devm_gpio_request(dev, pdata->gpio_vdd, "zinitix_vdd_gpio");
-		if (ret) {
-			input_err(true, dev,
-				"%s Failed gpio_request : zinitix,vdd_en\n",
-				__func__);
-			return -EINVAL;
-		}
-		gpio_direction_output(pdata->gpio_vdd, 0);
-	}	
-	pdata->bringup = of_property_read_bool(np, "zinitix,bringup");
 	
-	pdata->tsp_power = bt532_power_ctrl;
 
 	/* Optional parmeters(those values are not mandatory)
 	 * do not return error value even if fail to get the value
@@ -7782,102 +4649,94 @@ static int bt532_ts_probe_dt(struct device_node *np,
 	of_property_read_string(np, "zinitix,regulator_tkled", &pdata->regulator_tkled);
 
 	pdata->support_touchkey = of_property_read_bool(np, "zinitix,touchkey");
-	pdata->support_spay = of_property_read_bool(np, "zinitix,spay");
-	pdata->support_aod = of_property_read_bool(np, "zinitix,aod");
-	pdata->support_lpm_mode = (pdata->support_spay |pdata->support_aod);
-	pdata->bringup = of_property_read_bool(np, "zinitix,bringup");
-#ifdef PAT_CONTROL
-	ret = of_property_read_u32(np, "zinitix,pat_function", &temp);
-	if (ret) {
-		dev_info(dev, "Unable to read pat_function\n");
-		pdata->pat_function = PAT_CONTROL_FORCE_UPDATE;
-	} else
-		pdata->pat_function = (u16) temp;
-
-	ret = of_property_read_u32(np, "zinitix,afe_base", &temp);
-	if (ret) {
-		dev_info(dev, "Unable to read afe_base\n");
-		pdata->afe_base = 0;
-	} else
-		pdata->afe_base = (u16) temp;
 	
-	pdata->mis_cal_check = of_property_read_bool(np, "zinitix,mis_cal_check");
-#endif
+	pr_info("[TSP]: %s:%d - Success!\n", __func__, __LINE__);
 
 	return 0;
 }
-#endif
+
+unsigned int bt532_bootmode;
+static int __init get_bootmode(char *arg)
+{
+	get_option(&arg, &bt532_bootmode);
+
+	return 0;
+}
+early_param("bootmode", get_bootmode);
+
+extern int get_lcd_attached(char *mode);
+
 
 static int bt532_ts_probe(struct i2c_client *client,
 		const struct i2c_device_id *i2c_id)
 {
 	struct i2c_adapter *adapter = to_i2c_adapter(client->dev.parent);
-	struct bt532_ts_platform_data *pdata = client->dev.platform_data;
+	struct bt532_ts_platform_data *pdata;
 	struct bt532_ts_info *info;
 	struct input_dev *input_dev;
 	struct device_node *np = client->dev.of_node;
 	int ret = 0;
 	int i;
 	bool force_update = false;
-
-#ifdef CONFIG_BATTERY_SAMSUNG
-	if (poweroff_charging) {
-		dev_err(&client->dev, "%s : Do not load driver due to : lpm %d\n",
-			 __func__, poweroff_charging);
+	
+	pr_info("[TSP]: %s:%d\n", __func__, __LINE__);
+	
+	if (bt532_bootmode == 2) {
+		dev_err(&client->dev,
+			"%s : Do not load driver due to : device entered recovery mode %d\n",
+			__func__, bt532_bootmode);
 		return -ENODEV;
 	}
-#endif
-
-	if (client->dev.of_node) {
-		if (!pdata) {
-			pdata = devm_kzalloc(&client->dev,
-					sizeof(*pdata), GFP_KERNEL);
-			if (!pdata)
-				return -ENOMEM;
-		}
-		ret = bt532_ts_probe_dt(np, &client->dev, pdata);
-		if (ret){
-			dev_err(&client->dev, "Error parsing dt %d\n", ret);
-			goto err_no_platform_data;
-		}
-		ret = zinitix_init_gpio(pdata);
-		if(ret < 0)
-			goto err_gpio_request;
-
+	
+	/* when lcd moudle was taken off, lcd id is received 0xFFFFFF */
+	if (get_lcd_attached("GET") == 0xFFFFFF) {
+		dev_err(&client->dev,
+				"%s: LCD module was taken off\n",
+				__func__);
+		return -ENODEV;
 	}
-	else if (!pdata) {
-		input_err(true, &client->dev, "Not exist platform data\n");
-		return -EINVAL;
-	}
-
+	
 	if (!i2c_check_functionality(adapter, I2C_FUNC_I2C)) {
-		input_err(true, &client->dev, "Not compatible i2c function\n");
+		tsp_debug_err(true, &client->dev, "Not compatible i2c function\n");
 		return -EIO;
 	}
 
+	pdata = devm_kzalloc(&client->dev,
+			sizeof(*pdata), GFP_KERNEL);
+	if (!pdata)
+		return -ENOMEM;
+	
 	info = kzalloc(sizeof(struct bt532_ts_info), GFP_KERNEL);
 	if (!info) {
-		input_err(true, &client->dev, "Failed to allocate memory\n");
+		tsp_debug_err(true, &client->dev, "Failed to allocate memory\n");
 		return -ENOMEM;
 	}
-
+	
+	ret = bt532_ts_probe_dt(np, &client->dev, pdata);
+	if (ret){
+		dev_err(&client->dev, "Error parsing dt %d\n", ret);
+		goto err_no_platform_data;
+	}
+	
 	i2c_set_clientdata(client, info);
 	info->client = client;
 	info->pdata = pdata;
 
 	input_dev = input_allocate_device();
 	if (!input_dev) {
-		input_err(true, &client->dev, "Failed to allocate input device\n");
+		tsp_debug_err(true, &client->dev, "Failed to allocate input device\n");
 		ret = -ENOMEM;
 		goto err_alloc;
 	}
 
+#ifdef USE_PIN_CTRL
 	info->pinctrl = devm_pinctrl_get(&client->dev);
 	if (IS_ERR(info->pinctrl)) {
-		input_err(true, &client->dev, "%s: Failed to get pinctrl data\n", __func__);
+		tsp_debug_err(true, &client->dev, "%s: Failed to get pinctrl data\n", __func__);
 		ret = PTR_ERR(info->pinctrl);
 		goto err_get_pinctrl;
 	}
+#endif
 
 	info->input_dev = input_dev;
 	info->work_state = PROBE;
@@ -7887,7 +4746,7 @@ static int bt532_ts_probe(struct i2c_client *client,
 		ret = -EPERM;
 		goto err_power_sequence;
 	}
-
+	
 /* To Do */
 /* FW version read from tsp */
 
@@ -7897,42 +4756,32 @@ static int bt532_ts_probe(struct i2c_client *client,
 	/* init touch mode */
 	info->touch_mode = TOUCH_POINT_MODE;
 	misc_info = info;
+
 	mutex_init(&info->set_reg_lock);
-
-#if ESD_TIMER_INTERVAL
-	spin_lock_init(&info->lock);
-	INIT_WORK(&info->tmr_work, ts_tmr_work);
-	esd_tmr_workqueue =
-		create_singlethread_workqueue("esd_tmr_workqueue");
-
-	if (!esd_tmr_workqueue) {
-		input_err(true, &client->dev, "Failed to create esd tmr work queue\n");
-		ret = -EPERM;
-
-		goto err_esd_sequence;
-	}
-
-	esd_timer_init(info);
-#endif
 
 	ret = ic_version_check(info);
 	if (ret < 0) {
-		input_err(true, &info->client->dev,
+		tsp_debug_err(true, &info->client->dev,
 			"%s: fail version check", __func__);
 		force_update = true;
 	}
-
-#ifdef PAT_CONTROL
-	if (info->pdata->pat_function == PAT_CONTROL_FORCE_UPDATE)
-		force_update = true;
-#endif
-
-	ret = fw_update_work(info, force_update);
-	if (ret < 0) {
-		ret = -EPERM;
-		input_err(true, &info->client->dev,
-			"%s: fail update_work", __func__);
-		goto err_fw_update;
+	
+	{
+#if defined (CONFIG_SEC_FACTORY)
+		extern char *saved_command_line;
+		
+		printk("%s\n", saved_command_line);
+		if(strstr(saved_command_line, "calibration") == NULL)
+#endif //CONFIG_SEC_FACTORY
+		{
+			ret = fw_update_work(info, force_update);
+			if (ret < 0) {
+				ret = -EPERM;
+				tsp_debug_err(true, &info->client->dev,
+					"%s: fail update_work", __func__);
+				goto err_fw_update;
+			}
+		}
 	}
 
 	if(pdata->support_touchkey){
@@ -7954,31 +4803,26 @@ static int bt532_ts_probe(struct i2c_client *client,
 	set_bit(EV_ABS, info->input_dev->evbit);
 	set_bit(BTN_TOUCH, info->input_dev->keybit);
 	set_bit(INPUT_PROP_DIRECT, info->input_dev->propbit);
+#ifdef CONFIG_TOUCHKEY_LED	
 	set_bit(EV_LED, info->input_dev->evbit);
 	set_bit(LED_MISC, info->input_dev->ledbit);
+#endif	
 	if(pdata->support_touchkey){
 		for (i = 0; i < MAX_SUPPORTED_BUTTON_NUM; i++)
 			set_bit(BUTTON_MAPPING_KEY[i], info->input_dev->keybit);
-	}
-
-	if(pdata->support_lpm_mode){
-		set_bit(KEY_BLACK_UI_GESTURE, info->input_dev->keybit);
 	}
 
 	input_set_abs_params(info->input_dev, ABS_MT_POSITION_X,
 		0, pdata->x_resolution + ABS_PT_OFFSET,	0, 0);
 	input_set_abs_params(info->input_dev, ABS_MT_POSITION_Y,
 		0, pdata->y_resolution + ABS_PT_OFFSET,	0, 0);
-#ifdef CONFIG_SEC_FACTORY
-	input_set_abs_params(info->input_dev, ABS_MT_PRESSURE,
-		0, 3000, 0, 0);
-#endif
+
 	input_set_abs_params(info->input_dev, ABS_MT_TOUCH_MAJOR,
 		0, 255, 0, 0);
 	input_set_abs_params(info->input_dev, ABS_MT_WIDTH_MAJOR,
 		0, 255, 0, 0);
 
-#ifdef SUPPORTED_PALM_TOUCH
+#if (TOUCH_POINT_MODE == 2)
 	input_set_abs_params(info->input_dev, ABS_MT_TOUCH_MINOR,
 		0, 255, 0, 0);
 	input_set_abs_params(info->input_dev, ABS_MT_PALM,
@@ -7992,10 +4836,30 @@ static int bt532_ts_probe(struct i2c_client *client,
 	input_set_drvdata(info->input_dev, info);
 	ret = input_register_device(info->input_dev);
 	if (ret) {
-		input_info(true, &client->dev, "unable to register %s input device\r\n",
+		tsp_debug_info(true, &client->dev, "unable to register %s input device\r\n",
 			info->input_dev->name);
 		goto err_input_register_device;
 	}
+
+#if ESD_TIMER_INTERVAL
+	spin_lock_init(&info->lock);
+	INIT_WORK(&info->tmr_work, ts_tmr_work);
+	esd_tmr_workqueue =
+		create_singlethread_workqueue("esd_tmr_workqueue");
+
+	if (!esd_tmr_workqueue) {
+		tsp_debug_err(true, &client->dev, "Failed to create esd tmr work queue\n");
+		ret = -EPERM;
+
+		goto err_esd_sequence;
+	}
+
+	esd_timer_init(info);
+/*	esd_timer_start(CHECK_ESD_TIMER, info);
+#if defined(TSP_VERBOSE_DEBUG)
+	tsp_debug_info(true, &client->dev, "Started esd timer\n");
+#endif*/
+#endif
 
 	if(init_touch(info) == false) {
 		ret = -EPERM;
@@ -8008,7 +4872,7 @@ static int bt532_ts_probe(struct i2c_client *client,
 	/* configure irq */
 	info->irq = gpio_to_irq(pdata->gpio_int);
 	if (info->irq < 0){
-		input_info(true, &client->dev, "error. gpio_to_irq(..) function is not \
+		tsp_debug_info(true, &client->dev, "error. gpio_to_irq(..) function is not \
 			supported? you should define GPIO_TOUCH_IRQ.\r\n");
 		ret = -EINVAL;
 		goto error_gpio_irq;
@@ -8019,17 +4883,11 @@ static int bt532_ts_probe(struct i2c_client *client,
 		IRQF_TRIGGER_FALLING | IRQF_ONESHOT , BT532_TS_DEVICE, info);
 
 	if (ret) {
-		input_info(true, &client->dev, "unable to register irq.(%s)\r\n",
+		tsp_debug_info(true, &client->dev, "unable to register irq.(%s)\r\n",
 			info->input_dev->name);
 		goto err_request_irq;
 	}
-	input_info(true, &client->dev, "zinitix touch probe.\r\n");
-
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-	trustedui_set_tsp_irq(info->irq);
-	input_info(true, &client->dev, "%s[%d] called!\n",
-		__func__, info->irq);
-#endif
+	tsp_debug_info(true, &client->dev, "zinitix touch probe.\r\n");
 
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	info->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN + 1;
@@ -8051,14 +4909,14 @@ static int bt532_ts_probe(struct i2c_client *client,
 #ifdef USE_MISC_DEVICE
 	ret = misc_register(&touch_misc_device);
 	if (ret) {
-		input_err(true, &client->dev, "Failed to register touch misc device\n");
+		tsp_debug_err(true, &client->dev, "Failed to register touch misc device\n");
 		goto err_misc_register;
 	}
 #endif
 #ifdef SEC_FACTORY_TEST
 	ret = init_sec_factory(info);
 	if (ret) {
-		input_err(true, &client->dev, "Failed to init sec factory device\n");
+		tsp_debug_err(true, &client->dev, "Failed to init sec factory device\n");
 
 		goto err_kthread_create_failed;
 	}
@@ -8074,26 +4932,7 @@ static int bt532_ts_probe(struct i2c_client *client,
 				VBUS_NOTIFY_DEV_CHARGER);
 #endif
 
-	if(pdata->support_lpm_mode){
-		device_init_wakeup(&client->dev, true);
-	}
-	
-#ifdef CONFIG_SECURE_TOUCH
-		for (i = 0; i < ARRAY_SIZE(secure_attrs); i++) {
-			ret = sysfs_create_file(&info->input_dev->dev.kobj,
-						&secure_attrs[i].attr);
-			if (ret < 0)
-				dev_err(&info->client->dev,
-						"%s: Failed to create secure_attrs\n", __func__);
-		}
-	
-		secure_touch_init(info);
-#endif
-
-#ifdef CONFIG_TRUSTONIC_TRUSTED_UI
-	tui_tsp_info = info;
-#endif
-
+	pr_info("[TSP]: %s:%d - Success!\n", __func__, __LINE__);
 	return 0;
 
 #ifdef SEC_FACTORY_TEST
@@ -8108,22 +4947,22 @@ err_misc_register:
 err_request_irq:
 error_gpio_irq:
 err_init_touch:
-	input_unregister_device(info->input_dev);
-err_input_register_device:
-err_fw_update:
 #if ESD_TIMER_INTERVAL
 err_esd_sequence:
 #endif
+	input_unregister_device(info->input_dev);
+err_input_register_device:
+err_fw_update:
 err_power_sequence:
 	bt532_power_control(info, POWER_OFF);
 	input_free_device(info->input_dev);
+#ifdef USE_PIN_CTRL	
 err_get_pinctrl:
+#endif
 err_alloc:
 	kfree(info);
-err_gpio_request:
 err_no_platform_data:
-	if (IS_ENABLED(CONFIG_OF))
-		devm_kfree(&client->dev, (void *)pdata);
+	devm_kfree(&client->dev, (void *)pdata);
 	dev_info(&client->dev, "Failed to probe\n");
 	return ret;
 }
@@ -8146,7 +4985,7 @@ static int bt532_ts_remove(struct i2c_client *client)
 	write_reg(info->client, BT532_PERIODICAL_INTERRUPT_INTERVAL, 0);
 	esd_timer_stop(info);
 #if defined(TSP_VERBOSE_DEBUG)
-	input_info(true, &client->dev, "Stopped esd timer\n");
+	tsp_debug_info(true, &client->dev, "Stopped esd timer\n");
 #endif
 	destroy_workqueue(esd_tmr_workqueue);
 #endif
@@ -8175,7 +5014,7 @@ void bt532_ts_shutdown(struct i2c_client *client)
 {
 	struct bt532_ts_info *info = i2c_get_clientdata(client);
 
-	input_info(true, &client->dev, "%s++\n",__func__);
+	tsp_debug_info(true, &client->dev, "%s++\n",__func__);
 	disable_irq(info->irq);
 	down(&info->work_lock);
 #if ESD_TIMER_INTERVAL
@@ -8184,7 +5023,7 @@ void bt532_ts_shutdown(struct i2c_client *client)
 #endif
 	up(&info->work_lock);
 	bt532_power_control(info, POWER_OFF);
-	input_info(true, &client->dev, "%s--\n",__func__);
+	tsp_debug_info(true, &client->dev, "%s--\n",__func__);
 }
 
 static struct i2c_device_id bt532_idtable[] = {
@@ -8192,12 +5031,10 @@ static struct i2c_device_id bt532_idtable[] = {
 	{ }
 };
 
-#ifdef CONFIG_OF
 static const struct of_device_id zinitix_match_table[] = {
 	{ .compatible = "zinitix,bt532_ts_device",},
 	{},
 };
-#endif
 
 #if defined(CONFIG_PM) && !defined(CONFIG_HAS_EARLYSUSPEND) &&!defined(CONFIG_INPUT_ENABLED)
 static const struct dev_pm_ops bt532_ts_pm_ops = {
@@ -8220,34 +5057,28 @@ static struct i2c_driver bt532_ts_driver = {
 #if defined(CONFIG_PM) && !defined(CONFIG_HAS_EARLYSUSPEND) &&!defined(CONFIG_INPUT_ENABLED)
 		.pm		= &bt532_ts_pm_ops,
 #endif
-#ifdef CONFIG_OF
 		.of_match_table = zinitix_match_table,
-#endif
 	},
 };
 
-#if 0
-#if defined(CONFIG_SPA) || defined(CONFIG_SPA_LPM_MODE)
-extern int spa_lpm_charging_mode_get();
-#else
-extern unsigned int lpcharge;
-#endif
-#endif
 
 static int __init bt532_ts_init(void)
 {
 	pr_info("[TSP]: %s\n", __func__);
+
+#ifdef CONFIG_BATTERY_SAMSUNG
+	{
+		extern int poweroff_charging;
+		
+		if (poweroff_charging) {
+			pr_info("%s : Do not load driver due to : lpm %d\n",
+                __func__, poweroff_charging);
+			return 0;
+		}
+	}
+#endif
+	
 	return i2c_add_driver(&bt532_ts_driver);
-#if 0
-#if defined(CONFIG_SPA) || defined(CONFIG_SPA_LPM_MODE)
-	if (!spa_lpm_charging_mode_get())
-#else
-	if (!lpcharge)
-#endif
-		return i2c_add_driver(&bt532_ts_driver);
-	else
-		return 0;
-#endif
 }
 
 static void __exit bt532_ts_exit(void)

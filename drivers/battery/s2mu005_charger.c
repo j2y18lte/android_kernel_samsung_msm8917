@@ -1182,6 +1182,9 @@ static int s2mu005_charger_probe(struct platform_device *pdev)
 	charger->psy_otg.num_properties	= ARRAY_SIZE(s2mu005_otg_props);
 
 	s2mu005_chg_init(charger);
+	
+	charger->input_current = s2mu005_get_input_current_limit(charger->client);
+	charger->charging_current = s2mu005_get_fast_charging_current(charger->client);
 
 	ret = power_supply_register(&pdev->dev, &charger->psy_chg);
 	if (ret) {

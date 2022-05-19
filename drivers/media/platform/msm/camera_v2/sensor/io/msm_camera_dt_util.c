@@ -1268,7 +1268,7 @@ int msm_camera_power_up(struct msm_camera_power_ctrl_t *ctrl,
 	int rc = 0, index = 0, no_gpio = 0, ret = 0;
 	struct msm_sensor_power_setting *power_setting = NULL;
 
-	CDBG("%s:%d\n", __func__, __LINE__);
+	pr_err("%s:%d\n", __func__, __LINE__);
 	if (!ctrl || !sensor_i2c_client) {
 		pr_err("failed ctrl %pK sensor_i2c_client %pK\n", ctrl,
 			sensor_i2c_client);
@@ -1394,7 +1394,7 @@ int msm_camera_power_up(struct msm_camera_power_ctrl_t *ctrl,
 		}
 	}
 
-	CDBG("%s exit\n", __func__);
+	pr_err("%s exit\n", __func__);
 	return 0;
 power_up_failed:
 	pr_err("%s:%d failed\n", __func__, __LINE__);

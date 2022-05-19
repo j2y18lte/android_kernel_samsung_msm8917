@@ -170,9 +170,14 @@ fw-shipped-$(CONFIG_TOUCHSCREEN_SYNAPTICS_INCELL) += tsp_synaptics/td4100_on5xll
 						tsp_synaptics/td4100_on5xllte_recovery.fw
 fw-shipped-$(CONFIG_KEYBOARD_MELFAS_MHS204) += tk_melfas/mhs204_on5xllte.fw
 endif
-ifdef CONFIG_SEC_J1Y17LTE_PROJECT
-fw-shipped-$(CONFIG_TOUCHSCREEN_IST30XXH) += tsp_imagis/ist3038h_j1.fw  \
-					tsp_imagis/ist3038h_j1_cmcs.bin
+ifdef CONFIG_SEC_J2Y18LTE_PROJECT
+fw-shipped-$(CONFIG_TOUCHSCREEN_IST30XXH) += tsp_imagis/ist3038h_j2y18.fw  \
+					tsp_imagis/ist3038h_j2y18_cmcs.bin  \
+					tsp_imagis/ist3038h_j2y18_octa.fw \
+					tsp_imagis/ist3038h_j2y18_octa_cmcs.bin
+fw-shipped-$(CONFIG_TOUCHSCREEN_ZINITIX_BT431) += tsp_zinitix/bt431_j23g.fw
+fw-shipped-$(CONFIG_KEYBOARD_ABOV_TOUCH_T316) += abov/a96t316au_j2y18.fw \
+					abov/a96t316au_j2y18eur.fw
 endif
 ifdef CONFIG_SEC_J3POPLTE_PROJECT
 fw-shipped-$(CONFIG_TOUCHSCREEN_SYNAPTICS_INCELL) += tsp_synaptics/td4100_j3pop.fw \

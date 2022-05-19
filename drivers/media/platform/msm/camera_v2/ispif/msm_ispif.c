@@ -46,7 +46,7 @@
 
 #define ISPIF_TIMEOUT_SLEEP_US                1000
 #define ISPIF_TIMEOUT_ALL_US               1000000
-#define ISPIF_SOF_DEBUG_COUNT                    5
+#define ISPIF_SOF_DEBUG_COUNT                 1000
 
 #undef CDBG
 #ifdef CONFIG_MSMB_CAMERA_DEBUG

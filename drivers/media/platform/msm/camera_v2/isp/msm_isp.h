@@ -37,6 +37,7 @@
 #define VFE40_8952_VERSION 0x10060000
 #define VFE40_8976_VERSION 0x10050000
 #define VFE40_8937_VERSION 0x10080000
+#define VFE40_8917_VERSION 0x10080001
 #define VFE40_8953_VERSION 0x10090000
 #define VFE32_8909_VERSION 0x30600
 
@@ -62,7 +63,7 @@
 #define MAX_BUFFERS_IN_HW 2
 
 #define MAX_VFE 2
-#define MAX_RECOVERY_THRESHOLD  5
+#define MAX_RECOVERY_THRESHOLD  10
 
 struct vfe_device;
 struct msm_vfe_axi_stream;
@@ -734,6 +735,15 @@ struct vfe_device {
 
 	/* irq info */
 	uint32_t ignore_irq;
+	
+	/* last received irq */  
+	uint32_t irq_status0; 
+	uint32_t irq_status1; 
+	uint32_t ping_pong_status; 
+	
+	/* before halt irq info */ 
+	uint32_t at_halt_irq0_mask; 
+	uint32_t at_halt_irq1_mask;
 };
 
 struct vfe_parent_device {

@@ -837,7 +837,7 @@ struct msm_flash_cfg_data_t32 {
 		compat_uptr_t flash_init_info;
 		compat_uptr_t settings;
 	} cfg;
-	enum flash_position_t flash_position;
+    enum flash_position_t flash_position;
 };
 
 #define VIDIOC_MSM_ACTUATOR_CFG32 \

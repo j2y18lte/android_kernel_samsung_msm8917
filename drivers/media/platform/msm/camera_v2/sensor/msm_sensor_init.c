@@ -27,9 +27,7 @@
 #undef CDBG
 #define CDBG(fmt, args...) pr_debug(fmt, ##args)
 
-#if !defined(CONFIG_DISABLE_SVC_REAR_MODULE)
 extern struct kset *devices_kset;
-#endif
 static struct msm_sensor_init_t *s_init;
 static struct v4l2_file_operations msm_sensor_init_v4l2_subdev_fops;
 struct class *camera_class;
@@ -187,8 +185,8 @@ static long msm_sensor_init_subdev_fops_ioctl(
 static ssize_t back_camera_type_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
-#if defined(CONFIG_S5K3P8SX_AK7372)
-  char cam_type[] = "LSI_S5K3P8SX_AK7372\n";
+#if defined(CONFIG_S5K3L2XX)
+  char cam_type[] = "LSI_S5K3L2XX\n";
 #else
   char cam_type[] = "LSI_S5K3P3YX\n";
 #endif
@@ -202,8 +200,6 @@ static ssize_t front_camera_type_show(struct device *dev,
 	char cam_type[] = "SR259\n";
 #elif defined(CONFIG_S5K5E3YX)
     char cam_type[] = "S5K5E3YX\n";
-#elif defined(CONFIG_S5K3P8SX)
-	char cam_type[] = "S5K3P8SX\n";
 #else
 	char cam_type[] = "S5K4H5YX\n";
 #endif
@@ -339,12 +335,6 @@ static ssize_t back_cal_data_check_show(struct device *dev,
 	return snprintf(buf, sizeof(cal_crc), "%s", cal_crc);
 }
 
-static ssize_t front_cal_data_check_show(struct device *dev,
-			struct device_attribute *attr, char *buf)
-{
-	return sprintf(buf, "NULL NULL NULL\n");
-}
-
 static ssize_t back_cal_data_check_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t size)
 {
@@ -370,7 +360,7 @@ static ssize_t back_isp_core_check_store(struct device *dev,
 
 	return size;
 }
-#if defined(CONFIG_MSM_FRONT_EEPROM)
+#if defined(CONFIG_MSM_FRONT_EEPROM) || defined(CONFIG_MSM_FRONT_OTP)
 char front_cam_fw_ver[25] = "NULL NULL\n";
 #elif defined(CONFIG_SR259)
 char front_cam_fw_ver[25] = "SR259 N\n";
@@ -390,14 +380,14 @@ static ssize_t front_camera_firmware_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t size)
 {
 	CDBG("[FW_DBG] buf : %s\n", buf);
-#if defined(CONFIG_MSM_OTP) || defined(CONFIG_MSM_FRONT_EEPROM)
+#if defined(CONFIG_MSM_FRONT_OTP) || defined(CONFIG_MSM_FRONT_EEPROM)
 	snprintf(front_cam_fw_ver, sizeof(front_cam_fw_ver), "%s", buf);
 #endif
 
 	return size;
 }
 
-#if defined(CONFIG_MSM_FRONT_EEPROM)
+#if defined(CONFIG_MSM_FRONT_EEPROM) || defined(CONFIG_MSM_FRONT_OTP)
 char front_cam_fw_full_ver[40] = "NULL NULL NULL\n";
 #elif defined(CONFIG_SR259)
 char front_cam_fw_full_ver[40] = "SR259 N N\n";
@@ -418,13 +408,13 @@ static ssize_t front_camera_firmware_full_store(struct device *dev,
 			struct device_attribute *attr, const char *buf, size_t size)
 {
 	CDBG("[FW_DBG] buf : %s\n", buf);
-#if defined(CONFIG_MSM_OTP) || defined(CONFIG_MSM_FRONT_EEPROM)
+#if defined(CONFIG_MSM_FRONT_OTP) || defined(CONFIG_MSM_FRONT_EEPROM)
 	snprintf(front_cam_fw_full_ver, sizeof(front_cam_fw_full_ver), "%s", buf);
 #endif
 	return size;
 }
 
-#if defined(CONFIG_MSM_FRONT_EEPROM)
+#if defined(CONFIG_MSM_FRONT_EEPROM) || defined(CONFIG_MSM_FRONT_OTP)
 char front_cam_fw_user_ver[40] = "NULL\n";
 #else
 char front_cam_fw_user_ver[40] = "OK\n";
@@ -706,8 +696,6 @@ static DEVICE_ATTR(rear_fwcheck, S_IRUGO|S_IWUSR|S_IWGRP,
     back_fw_crc_check_show, back_fw_crc_check_store);
 static DEVICE_ATTR(rear_afcal, S_IRUGO|S_IWUSR|S_IWGRP,
     back_cal_data_check_show, back_cal_data_check_store);
-static DEVICE_ATTR(front_afcal, S_IRUGO|S_IWUSR|S_IWGRP,
-    front_cal_data_check_show, NULL);
 static DEVICE_ATTR(isp_core, S_IRUGO|S_IWUSR|S_IWGRP,
     back_isp_core_check_show, back_isp_core_check_store);
 static DEVICE_ATTR(front_camtype, S_IRUGO, front_camera_type_show, NULL);
@@ -728,9 +716,7 @@ static DEVICE_ATTR(front_caminfo, S_IRUGO|S_IWUSR|S_IWGRP,
 
 #if defined(CONFIG_GET_REAR_MODULE_ID)
 static DEVICE_ATTR(rear_moduleid, S_IRUGO, back_camera_moduleid_show, NULL);
-#if !defined(CONFIG_DISABLE_SVC_REAR_MODULE)
 static DEVICE_ATTR(SVC_rear_module, S_IRUGO, back_camera_moduleid_show, NULL);
-#endif
 #endif
 
 #if defined(CONFIG_GET_FRONT_MODULE_ID)
@@ -744,7 +730,6 @@ static DEVICE_ATTR(front_hwparam, S_IRUGO|S_IWUSR|S_IWGRP,
 		front_camera_hw_param_show, front_camera_hw_param_store);
 #endif
 
-#if !defined(CONFIG_DISABLE_SVC_REAR_MODULE)
 int svc_cheating_prevent_device_file_create(struct kobject **obj)
 {
 	struct kernfs_node *SVC_sd;
@@ -775,7 +760,6 @@ int svc_cheating_prevent_device_file_create(struct kobject **obj)
 	*obj = Camera;
 	return 0;
 }
-#endif
 
 
 static int __init msm_sensor_init_module(void)
@@ -783,12 +767,10 @@ static int __init msm_sensor_init_module(void)
 	struct device         *cam_dev_back;
 	struct device         *cam_dev_front;
 
+	struct kobject *SVC = 0;
 	int ret = 0;
 
-#if !defined(CONFIG_DISABLE_SVC_REAR_MODULE)
-	struct kobject *SVC = 0;
 	svc_cheating_prevent_device_file_create(&SVC);
-#endif
 
 	camera_class = class_create(THIS_MODULE, "camera");
 	if (IS_ERR(camera_class))
@@ -919,14 +901,14 @@ static int __init msm_sensor_init_module(void)
 		ret = -ENODEV;
 		goto device_create_fail;
 	}
-#if !defined(CONFIG_DISABLE_SVC_REAR_MODULE)
+
 	if (sysfs_create_file(SVC, &dev_attr_SVC_rear_module.attr) < 0) {
 		printk("Failed to create device file!(%s)!\n",
 			dev_attr_SVC_rear_module.attr.name);
 		ret = -ENODEV;
 		goto device_create_fail;
 	}
-#endif
+
 #endif
 
 	cam_dev_front = device_create(camera_class, NULL,
@@ -976,13 +958,6 @@ static int __init msm_sensor_init_module(void)
 	}
 #endif
 
-	if (device_create_file(cam_dev_front, &dev_attr_front_afcal) < 0) {
-		printk("Failed to create device file!(%s)!\n",
-			dev_attr_front_afcal.attr.name);
-		ret = -ENODEV;
-		goto device_create_fail;
-	}
-	
 #if defined(CONFIG_GET_FRONT_MODULE_ID)	
 	if (device_create_file(cam_dev_front, &dev_attr_front_moduleid) < 0) {
 		printk("Failed to create device file!(%s)!\n",

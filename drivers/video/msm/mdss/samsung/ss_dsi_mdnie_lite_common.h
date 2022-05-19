@@ -130,6 +130,12 @@ enum HDR {
 	HDR_MAX
 };
 
+enum LIGHT_NOTIFICATION {
+	LIGHT_NOTIFICATION_OFF = 0,
+	LIGHT_NOTIFICATION_ON,
+	LIGHT_NOTIFICATION_MAX,
+};
+
 struct mdnie_lite_tun_type {
 	enum BYPASS mdnie_bypass;
 	enum BYPASS cabc_bypass;
@@ -141,13 +147,20 @@ struct mdnie_lite_tun_type {
 	enum ACCESSIBILITY mdnie_accessibility;
 	enum HMT_COLOR_TEMPERATURE hmt_color_temperature;
 	enum HDR hdr;
+	enum LIGHT_NOTIFICATION light_notification;
 
 	char scr_white_red;
 	char scr_white_green;
 	char scr_white_blue;
 
+	int scr_white_balanced_red;
+	int scr_white_balanced_green;
+	int scr_white_balanced_blue;
+
 	int night_mode_enable;
 	int night_mode_index;
+
+	int ldu_mode_index;
 
 	int index;
 	struct list_head used_list;
@@ -268,6 +281,7 @@ struct mdnie_lite_tune_data {
 	struct dsi_cmd_desc *(*mdnie_tune_value)[MAX_MODE][MAX_OUTDOOR_MODE];
 	struct dsi_cmd_desc **hmt_color_temperature_tune_value;
 	struct dsi_cmd_desc **hdr_tune_value;
+	struct dsi_cmd_desc **light_notification_tune_value;
 
 	int bypass_mdnie_size;
 	int mdnie_color_blinde_cmd_offset;
@@ -282,6 +296,15 @@ struct mdnie_lite_tune_data {
 	char *night_mode_table;
 	int max_night_mode_index;
 	int scr_step_index;
+	char white_default_r;
+	char white_default_g;
+	char white_default_b;
+	char white_ldu_r;
+	char white_ldu_g;
+	char white_ldu_b;
+	int white_balanced_r;
+	int white_balanced_g;
+	int white_balanced_b;
 };
 
 /* COMMON FUNCTION*/

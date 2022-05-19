@@ -53,7 +53,7 @@ static unsigned char c_byt_pair_index;
 static char utf_8_flag;
 static char rt_ert_flag;
 static char formatting_dir;
-static unsigned char sig_blend = CTRL_OFF;
+static unsigned char sig_blend = CTRL_ON;
 static DEFINE_MUTEX(iris_fm);
 
 module_param(rds_buf, uint, 0);
@@ -637,11 +637,15 @@ int radio_hci_unregister_dev(void)
 	struct iris_device *radio = video_get_drvdata(video_get_dev());
 	struct radio_hci_dev *hdev = NULL;
 
-	if (!radio && !radio->fm_hdev) {
-		FMDERR("radio/hdev is null");
+	if (!radio) {
+		FMDERR("radio is null");
 		return -EINVAL;
 	}
 	hdev = radio->fm_hdev;
+	if (!hdev) {
+		FMDERR("hdev is null");
+		return -EINVAL;
+	}
 
 	tasklet_kill(&hdev->rx_task);
 	tasklet_kill(&hdev->cmd_task);
@@ -5604,7 +5608,7 @@ static int initialise_recv(struct iris_device *radio)
 		return retval;
 	}
 
-	radio->stereo_mode.stereo_mode = CTRL_OFF;
+	radio->stereo_mode.stereo_mode = CTRL_ON;
 	radio->stereo_mode.sig_blend = sig_blend;
 	radio->stereo_mode.intf_blend = CTRL_ON;
 	radio->stereo_mode.most_switch = CTRL_ON;

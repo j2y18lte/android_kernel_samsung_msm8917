@@ -114,8 +114,8 @@
 	qcom,dsi-pref-prim-pan = <&ss_dsi_panel_EA8061S_AMS498QV01_QHD>;
 
 	pinctrl-names = "mdss_default", "mdss_sleep";
-	pinctrl-0 = <&mdss_lcd_active &mdss_lcd_reset_active>;
-	pinctrl-1 = <&mdss_lcd_suspend &mdss_lcd_reset_suspend>;
+	pinctrl-0 = <&mdss_lcd_active &mdss_lcd_reset_active &mdss_lcd_el_active>;
+	pinctrl-1 = <&mdss_lcd_suspend &mdss_lcd_reset_suspend &mdss_lcd_el_suspend>;
 
 	/* use fixed regulator instead of samsung,panel-extra-power-gpio or
 	 * qcom,platform-enable-gpio.

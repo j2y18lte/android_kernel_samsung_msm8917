@@ -598,7 +598,6 @@ struct sec_battery_platform_data {
 	unsigned int swelling_drop_float_voltage;
 	unsigned int swelling_high_rechg_voltage;
 	unsigned int swelling_low_rechg_voltage;
-	unsigned int swelling_low_1st_rechg_voltage;
 	unsigned int swelling_drop_voltage_condition;
 	unsigned int swelling_wc_low_temp_current;
 	unsigned int swelling_wc_high_temp_current;
@@ -730,7 +729,6 @@ struct sec_battery_platform_data {
 	int mix_high_temp;
 	int mix_high_chg_temp;
 	int mix_high_temp_recovery;
-	unsigned int mix_input_limit_current;
 
 	int wpcbatt_wpc_temp_threshold;
 	int wpcbatt_batt_temp_threshold;
@@ -845,6 +843,7 @@ struct sec_battery_platform_data {
 	bool fake_capacity;
 
 	int p_mux_channel;
+	int batt_channel;
 
 #if defined(CONFIG_BATTERY_CISD)
 	unsigned int battery_full_capacity;

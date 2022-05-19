@@ -88,6 +88,11 @@ char mdnie_hdr_name[][NAME_STRING_MAX] = {
 	"HDR_3"
 };
 
+char mdnie_light_notification_name[][NAME_STRING_MAX] = {
+	"LIGHT_NOTIFICATION_OFF",
+	"LIGHT_NOTIFICATION_ON"
+};
+
 void send_dsi_tcon_mdnie_register(struct samsung_display_driver_data *vdd,
 	struct dsi_cmd_desc *tune_data_cmds, struct mdnie_lite_tun_type *mdnie_tune_state)
 {
@@ -173,6 +178,8 @@ int update_dsi_tcon_mdnie_register(struct samsung_display_driver_data *vdd)
 		*/
 		if (mdnie_tune_state->mdnie_bypass == BYPASS_ENABLE) {
 			tune_data_cmds = mdnie_data[idx].BYPASS_MDNIE;
+		} else if (mdnie_tune_state->light_notification) {
+			tune_data_cmds  = mdnie_data[idx].light_notification_tune_value[mdnie_tune_state->light_notification];
 		} else if (mdnie_tune_state->mdnie_accessibility == COLOR_BLIND) {
 			tune_data_cmds  = mdnie_data[idx].COLOR_BLIND_MDNIE;
 		} else if (mdnie_tune_state->mdnie_accessibility == NEGATIVE) {
@@ -274,9 +281,6 @@ static ssize_t mode_store(struct device *dev,
 		if (!vdd)
 			vdd = mdnie_tune_state->vdd;
 
-		if (vdd->dtsi_data[0].tft_common_support && value >= NATURAL_MODE)
-			value++;
-
 		mdnie_tune_state->mdnie_mode = value;
 
 		DPRINT("%s[%d] mode : %d\n", __func__, mdnie_tune_state->index, mdnie_tune_state->mdnie_mode);
@@ -324,11 +328,6 @@ static int fake_id(int app_id)
 	return ret_id;
 }
 
-static ssize_t mode_max_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	return snprintf(buf, PAGE_SIZE, "%u\n", MAX_MODE);
-}
 
 static ssize_t scenario_store(struct device *dev,
 					  struct device_attribute *attr,
@@ -622,6 +621,82 @@ static ssize_t sensorRGB_store(struct device *dev,
 	return size;
 }
 
+static ssize_t whiteRGB_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	int buffer_pos = 0;
+	struct mdnie_lite_tun_type *mdnie_tune_state = NULL;
+	int idx;
+
+	int r, g, b;
+
+	buffer_pos += snprintf(buf, 256, "Current whiteRGB SETTING : ");
+	list_for_each_entry_reverse(mdnie_tune_state, &mdnie_list , used_list) {
+		idx = mdnie_tune_state->index;
+		r = mdnie_data[idx].white_balanced_r;
+		g = mdnie_data[idx].white_balanced_g;
+		b = mdnie_data[idx].white_balanced_b;
+		buffer_pos += snprintf(buf + buffer_pos, 256, "DSI%d : %d %d %d ", mdnie_tune_state->index, r, g, b);
+	}
+	buffer_pos += snprintf(buf + buffer_pos, 256, "\n");
+
+	DPRINT("%s\n", buf);
+
+	return buffer_pos;
+}
+
+static ssize_t whiteRGB_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t size)
+{
+	int i;
+	int white_red, white_green, white_blue;
+	struct mdnie_lite_tun_type *mdnie_tune_state = NULL;
+	struct mdnie_lite_tun_type *real_mdnie_tune_state = NULL;
+	struct dsi_cmd_desc *white_tunning_data = NULL;
+	struct samsung_display_driver_data *vdd = NULL;
+	int idx;
+
+	sscanf(buf, "%d %d %d", &white_red, &white_green, &white_blue);
+
+	list_for_each_entry_reverse(mdnie_tune_state, &mdnie_list , used_list) {
+		real_mdnie_tune_state = mdnie_tune_state;
+
+		idx = mdnie_tune_state->index;
+
+		if (!vdd)
+			vdd = mdnie_tune_state->vdd;
+
+		DPRINT("%s: white_red = %d, white_green = %d, white_blue = %d\n", __func__, white_red, white_green, white_blue);
+
+		if(mdnie_tune_state->mdnie_mode == AUTO_MODE) {
+			if((white_red <= 0 && white_red >= -40) && (white_green <= 0 && white_green >= -40) && (white_blue <= 0 && white_blue >= -40)) {
+				if(mdnie_tune_state->ldu_mode_index == 0) {
+					mdnie_data[idx].white_ldu_r = mdnie_data[idx].white_default_r;
+					mdnie_data[idx].white_ldu_g = mdnie_data[idx].white_default_g;
+					mdnie_data[idx].white_ldu_b = mdnie_data[idx].white_default_b;
+				}
+				for (i = 0; i < MAX_APP_MODE; i++) {
+					if ((mdnie_data[idx].mdnie_tune_value[i][AUTO_MODE][0] != NULL) && (i != eBOOK_APP)) {
+						white_tunning_data = mdnie_data[idx].mdnie_tune_value[i][AUTO_MODE][0];
+						white_tunning_data[mdnie_data[idx].scr_step_index].payload[mdnie_data[idx].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET]]
+							= (char)(mdnie_data[idx].white_ldu_r + white_red);
+						white_tunning_data[mdnie_data[idx].scr_step_index].payload[mdnie_data[idx].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]]
+							= (char)(mdnie_data[idx].white_ldu_g + white_green);
+						white_tunning_data[mdnie_data[idx].scr_step_index].payload[mdnie_data[idx].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]]
+							= (char)(mdnie_data[idx].white_ldu_b + white_blue);
+						mdnie_data[idx].white_balanced_r = white_red;
+						mdnie_data[idx].white_balanced_g = white_green;
+						mdnie_data[idx].white_balanced_b = white_blue;
+					}
+				}
+			}
+		}
+	}
+
+	update_dsi_tcon_mdnie_register(vdd);
+	return size;
+}
+
 static ssize_t mdnie_ldu_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -658,13 +733,34 @@ static ssize_t mdnie_ldu_store(struct device *dev,
 			vdd = mdnie_tune_state->vdd;
 
 		if ((idx >=0) && (idx < mdnie_data[midx].max_adjust_ldu)) {
+			mdnie_tune_state->ldu_mode_index = idx;
 			for (i = 0; i < MAX_APP_MODE; i++) {
 				for (j = 0; j < MAX_MODE; j++) {
 					if ((mdnie_data[midx].mdnie_tune_value[i][j][0] != NULL) && (i != eBOOK_APP) && (j != READING_MODE)) {
 						ldu_tunning_data = mdnie_data[midx].mdnie_tune_value[i][j][0];
-						ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET]] = mdnie_data[idx].adjust_ldu_table[j][idx * 3 + 0];
-						ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]] = mdnie_data[idx].adjust_ldu_table[j][idx * 3 + 1];
-						ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]] = mdnie_data[idx].adjust_ldu_table[j][idx * 3 + 2];
+						ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET]] = mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 0];
+						ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]] = mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 1];
+						ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]] = mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 2];
+
+						if(j == AUTO_MODE) {
+							ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET]] 
+								= mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 0] + mdnie_data[midx].white_balanced_r;
+							ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]] 
+								= mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 1] + mdnie_data[midx].white_balanced_g;
+							ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]] 
+								= mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 2] + mdnie_data[midx].white_balanced_b;
+							mdnie_data[midx].white_ldu_r = mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 0];
+							mdnie_data[midx].white_ldu_g = mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 1];
+							mdnie_data[midx].white_ldu_b = mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 2];
+						}
+						else {
+							ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET]]
+								= mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 0];
+							ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]]
+								= mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 1];
+							ldu_tunning_data[mdnie_data[midx].scr_step_index].payload[mdnie_data[midx].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]]
+								= mdnie_data[midx].adjust_ldu_table[j][idx * 3 + 2];
+						}
 					}
 				}
 			}
@@ -779,6 +875,55 @@ static ssize_t hdr_store(struct device *dev,
 	return size;
 }
 
+static ssize_t light_notification_show(struct device *dev,
+					 struct device_attribute *attr,
+					 char *buf)
+{
+	int buffer_pos = 0;
+	struct mdnie_lite_tun_type *mdnie_tune_state = NULL;
+
+	buffer_pos += snprintf(buf, 256, "Current LIGHT NOTIFICATION SETTING : ");
+	list_for_each_entry_reverse(mdnie_tune_state, &mdnie_list , used_list) {
+		buffer_pos += snprintf(buf + buffer_pos, 256, "PANEL%d : %s ", mdnie_tune_state->index, mdnie_light_notification_name[mdnie_tune_state->light_notification]);
+	}
+	buffer_pos += snprintf(buf + buffer_pos, 256, "\n");
+
+	DPRINT("%s\n", buf);
+
+	return buffer_pos;
+}
+
+static ssize_t light_notification_store(struct device *dev,
+					  struct device_attribute *attr,
+					  const char *buf, size_t size)
+{
+	int value;
+	int backup;
+	struct mdnie_lite_tun_type *mdnie_tune_state = NULL;
+	struct samsung_display_driver_data *vdd = NULL;
+
+	sscanf(buf, "%d", &value);
+
+	if (value < LIGHT_NOTIFICATION_OFF || value >= LIGHT_NOTIFICATION_MAX) {
+		DPRINT("[ERROR] wrong light notification value : %d\n", value);
+		return size;
+	}
+
+	list_for_each_entry_reverse(mdnie_tune_state, &mdnie_list , used_list) {
+		if (!vdd)
+			vdd = mdnie_tune_state->vdd;
+
+		backup = mdnie_tune_state->light_notification;
+		mdnie_tune_state->light_notification = value;
+
+		DPRINT("%s : (%d) -> (%d)\n", __func__, backup, value);
+	}
+
+	update_dsi_tcon_mdnie_register(vdd);
+
+	return size;
+}
+
 static ssize_t cabc_show(struct device *dev,
 					 struct device_attribute *attr,
 					 char *buf)
@@ -869,15 +1014,16 @@ static ssize_t hmt_color_temperature_store(struct device *dev,
 }
 
 static DEVICE_ATTR(mode, 0664, mode_show, mode_store);
-static DEVICE_ATTR(mode_max, 0664, mode_max_show, NULL);
 static DEVICE_ATTR(scenario, 0664, scenario_show, scenario_store);
 static DEVICE_ATTR(outdoor, 0664, outdoor_show, outdoor_store);
 static DEVICE_ATTR(bypass, 0664, bypass_show, bypass_store);
 static DEVICE_ATTR(accessibility, 0664, accessibility_show, accessibility_store);
 static DEVICE_ATTR(sensorRGB, 0664, sensorRGB_show, sensorRGB_store);
+static DEVICE_ATTR(whiteRGB, 0664, whiteRGB_show, whiteRGB_store);
 static DEVICE_ATTR(mdnie_ldu, 0664, mdnie_ldu_show, mdnie_ldu_store);
 static DEVICE_ATTR(night_mode, 0664, night_mode_show, night_mode_store);
 static DEVICE_ATTR(hdr, 0664, hdr_show, hdr_store);
+static DEVICE_ATTR(light_notification, 0664, light_notification_show, light_notification_store);
 static DEVICE_ATTR(cabc, 0664, cabc_show, cabc_store);
 static DEVICE_ATTR(hmt_color_temperature, 0664, hmt_color_temperature_show, hmt_color_temperature_store);
 
@@ -901,10 +1047,6 @@ void create_tcon_mdnie_node(void)
 	/* MODE */
 	if (device_create_file(tune_mdnie_dev, &dev_attr_mode) < 0)
 		DPRINT("Failed to create device file(%s)!\n", dev_attr_mode.attr.name);
-
-	/* MODE MAX */
-	if (device_create_file(tune_mdnie_dev, &dev_attr_mode_max) < 0)
-		DPRINT("Failed to create device file(%s)!\n", dev_attr_mode_max.attr.name);
 
 	/* OUTDOOR */
 	if (device_create_file(tune_mdnie_dev, &dev_attr_outdoor) < 0)
@@ -930,6 +1072,11 @@ void create_tcon_mdnie_node(void)
 			dev_attr_sensorRGB.attr.name);
 
 	if (device_create_file
+		(tune_mdnie_dev, &dev_attr_whiteRGB) < 0)
+		DPRINT("Failed to create device file(%s)!=n",
+			dev_attr_whiteRGB.attr.name);
+
+	if (device_create_file
 		(tune_mdnie_dev, &dev_attr_mdnie_ldu) < 0)
 		DPRINT("Failed to create device file(%s)!=n",
 			dev_attr_mdnie_ldu.attr.name);
@@ -943,6 +1090,11 @@ void create_tcon_mdnie_node(void)
 		(tune_mdnie_dev, &dev_attr_hdr) < 0)
 		DPRINT("Failed to create device file(%s)!=n",
 			dev_attr_hdr.attr.name);
+			
+	if (device_create_file
+		(tune_mdnie_dev, &dev_attr_light_notification) < 0)
+		DPRINT("Failed to create device file(%s)!=n",
+			dev_attr_hdr.attr.name);	
 
 	/* hmt_color_temperature */
 	if (device_create_file
@@ -991,6 +1143,7 @@ struct mdnie_lite_tun_type *init_dsi_tcon_mdnie_class(int index, struct samsung_
 		mdnie_tune_state->mdnie_mode = AUTO_MODE;
 		mdnie_tune_state->outdoor = OUTDOOR_OFF_MODE;
 		mdnie_tune_state->hdr = HDR_OFF;
+		mdnie_tune_state->light_notification = LIGHT_NOTIFICATION_OFF;
 
 		mdnie_tune_state->mdnie_accessibility = ACCESSIBILITY_OFF;
 
@@ -1000,6 +1153,8 @@ struct mdnie_lite_tun_type *init_dsi_tcon_mdnie_class(int index, struct samsung_
 
 		mdnie_tune_state->night_mode_enable = false;
 		mdnie_tune_state->night_mode_index = 0;
+
+		mdnie_tune_state->ldu_mode_index = 0;
 
 		INIT_LIST_HEAD(&mdnie_tune_state->used_list);
 
@@ -1033,6 +1188,16 @@ void coordinate_tunning_multi(int index, char (*coordinate_data_multi[MAX_MODE])
 				coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]] = coordinate_data_multi[j][mdnie_tune_index][2];
 				coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]] = coordinate_data_multi[j][mdnie_tune_index][4];
 			}
+			if((i == UI_APP) && (j == AUTO_MODE)) {
+				mdnie_data[index].white_default_r = coordinate_data_multi[j][mdnie_tune_index][0];
+				mdnie_data[index].white_default_g = coordinate_data_multi[j][mdnie_tune_index][2];
+				mdnie_data[index].white_default_b = coordinate_data_multi[j][mdnie_tune_index][4];
+#if defined(CONFIG_SEC_FACTORY)
+				coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET]] += mdnie_data[index].white_balanced_r;
+				coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]] += mdnie_data[index].white_balanced_g;
+				coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]] += mdnie_data[index].white_balanced_b;
+#endif
+			}
 		}
 	}
 }
@@ -1058,6 +1223,19 @@ void coordinate_tunning(int index, char *coordinate_data, int scr_wr_addr, int d
 					coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]] = coordinate_data[2];
 					coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]] = coordinate_data[4];
 				}
+				
+				if((i == UI_APP) && (j == AUTO_MODE)) {
+					mdnie_data[index].white_default_r = coordinate_data[0];
+					mdnie_data[index].white_default_g = coordinate_data[2];
+					mdnie_data[index].white_default_b = coordinate_data[4];
+#if defined(CONFIG_SEC_FACTORY)
+					coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_RED_OFFSET]] += mdnie_data[index].white_balanced_r;
+					coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_GREEN_OFFSET]] += mdnie_data[index].white_balanced_g;
+					coordinate_tunning_data[mdnie_data[index].scr_step_index].payload[mdnie_data[index].address_scr_white[ADDRESS_SCR_WHITE_BLUE_OFFSET]] += mdnie_data[index].white_balanced_b;
+#endif
+					}
+				
+				
 			}
 		}
 	}

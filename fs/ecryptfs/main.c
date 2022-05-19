@@ -461,6 +461,7 @@ static int ecryptfs_parse_options(struct ecryptfs_sb_info *sbi, char *options,
 				final, sizeof(final)),
 		mount_crypt_stat->global_default_cipher_key_size);
 	if (!cipher_code) {
+#ifdef __aarch64__
 		ecryptfs_printk(
 			KERN_ERR,
 			"eCryptfs doesn't support cipher: %s and key size %lu",
@@ -469,6 +470,16 @@ static int ecryptfs_parse_options(struct ecryptfs_sb_info *sbi, char *options,
 				mount_crypt_stat->global_default_cipher_mode,
 				final, sizeof(final)),
 			mount_crypt_stat->global_default_cipher_key_size);
+#else
+		ecryptfs_printk(
+			KERN_ERR,
+			"eCryptfs doesn't support cipher: %s and key size %lu",
+			ecryptfs_get_full_cipher(
+				mount_crypt_stat->global_default_cipher_name,
+				mount_crypt_stat->global_default_cipher_mode,
+				final, sizeof(final)),
+			(long unsigned int)(mount_crypt_stat->global_default_cipher_key_size));
+#endif
 		rc = -EINVAL;
 		goto out;
 	}

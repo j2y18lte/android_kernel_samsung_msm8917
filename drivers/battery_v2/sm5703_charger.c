@@ -814,7 +814,9 @@ static int sec_chg_get_property(struct power_supply *psy,
 
 	return 0;
 }
-
+#if defined(CONFIG_MUIC_SLAVE_MODE_CONTROL_VBUS)
+extern int manual_control_vbus_sw(bool enable);
+#endif
 static int sec_chg_set_property(struct power_supply *psy,
 		enum power_supply_property psp,
 		const union power_supply_propval *val)
@@ -824,6 +826,9 @@ static int sec_chg_set_property(struct power_supply *psy,
 
 	union power_supply_propval value;
 	int prev_cable_type;
+#ifndef CONFIG_MUIC_SLAVE_MODE_CONTROL_VBUS	
+	int cntl_val = 0;
+#endif	
 
 	switch (psp) {
 		case POWER_SUPPLY_PROP_STATUS:
@@ -844,6 +849,8 @@ static int sec_chg_set_property(struct power_supply *psy,
 			sm5703_set_aicl_level(charger);
 #endif /*DISABLE_AICL*/
 
+			sm5703_enable_autoset(charger, 0);
+
 			prev_cable_type = charger->cable_type;
 
 			if (charger->cable_type == POWER_SUPPLY_TYPE_POWER_SHARING){
@@ -854,6 +861,7 @@ static int sec_chg_set_property(struct power_supply *psy,
 				pr_info("OTG enable, cable(%d)\n", charger->cable_type);
 				sm5703_charger_otg_control(charger, 1);
 			} else if (charger->cable_type == POWER_SUPPLY_TYPE_BATTERY) {
+				sm5703_enable_autoset(charger,(int)charger->pdata->chg_autoset);
 				charger->is_charging = false;
 				sm5703_charger_vbus_control(charger, 0);
 				if(prev_cable_type != POWER_SUPPLY_TYPE_LAN_HUB)
@@ -877,6 +885,22 @@ static int sec_chg_set_property(struct power_supply *psy,
 						__func__, charger->charging_current);
 				sm5703_set_fast_charging_current(charger, charger->charging_current);
 			}
+#if defined(CONFIG_MUIC_SLAVE_MODE_CONTROL_VBUS)
+		manual_control_vbus_sw(sec_bat_get_slate_mode());
+#else		
+			if (sec_bat_get_slate_mode() == ENABLE) {
+				cntl_val = sm5703_reg_read(charger->i2c, SM5703_CNTL);
+				cntl_val &= SM5703_OPERATION_MODE_MASK;
+				if(cntl_val != 0x6){
+					sm5703_assign_bits(charger->i2c,
+						SM5703_CNTL, SM5703_OPERATION_MODE_MASK,
+						SM5703_OPERATION_MODE_SUSPEND);
+					pr_info("%s: SM5703 OPERATION MODE SUSPEND\n",__func__);
+				}
+			} else
+#endif			
+			sm5703_enable_charger_switch(charger, charger->is_charging);
+
 #if EN_TEST_READ
 			sm5703_test_read(charger->i2c);
 #endif
@@ -917,6 +941,17 @@ static int sec_chg_set_property(struct power_supply *psy,
 				pr_info("[DEBUG]%s: SKIP CHARGING CONTROL(%d)\n",
 						__func__, value.intval);
 			}
+#if defined(CONFIG_MUIC_SLAVE_MODE_CONTROL_VBUS)
+			manual_control_vbus_sw(sec_bat_get_slate_mode());
+#else			
+			if (sec_bat_get_slate_mode() == ENABLE) {
+				sm5703_assign_bits(charger->i2c,
+					SM5703_CNTL, SM5703_OPERATION_MODE_MASK,
+					SM5703_OPERATION_MODE_SUSPEND);
+				pr_info("%s: enabled SM5703 OPERATION MODE SUSPEND\n",__func__);
+			} else
+#endif
+			sm5703_enable_charger_switch(charger, charger->is_charging);
 			break;
 		case POWER_SUPPLY_PROP_ENERGY_NOW:
 			/* charger off when jig detected */
