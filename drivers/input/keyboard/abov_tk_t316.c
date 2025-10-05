@@ -175,6 +175,14 @@ struct abov_tk_info {
 	u16 grip_raw1;
 	u16 grip_raw2;
 	u16 grip_event;
+#ifdef CONFIG_SEC_FACTORY
+	struct delayed_work debug_work;
+	s16 diff;
+	s16 max_diff;
+	s16 max_normal_diff;
+	int abnormal_mode;
+	int irq_count;
+#endif
 	bool sar_mode;
 	bool sar_enable;
 	bool sar_enable_off;
@@ -195,7 +203,11 @@ struct abov_tk_info {
 	bool glovemode;
 	bool keyboard_mode;
 	bool flip_mode;
-	
+
+#ifdef USE_OPEN_CLOSE
+	bool probe_done;
+#endif
+
 	unsigned int key_num;
 	bool irq_checked;
 	int irq_key_count[MAX_KEY_NUM];
@@ -872,6 +884,47 @@ static void touchkey_sar_sensing(struct abov_tk_info *info, int on)
 	}
 	info->sar_sensing = on;
 }
+#ifdef CONFIG_SEC_FACTORY
+static void get_sar_diff_data(struct abov_tk_info *info)
+{
+	struct i2c_client *client = info->client;
+	int ret;
+	int retry;
+	u8 r_buf[2];
+
+	ret = abov_tk_i2c_read(info->client, CMD_SAR_DIFFDATA, r_buf, 2);
+	if (ret < 0) {
+		retry = 3;
+		while (retry--) {
+			input_err(true, &client->dev, "%s read fail(%d)\n",
+					__func__, retry);
+			ret = abov_tk_i2c_read(info->client, CMD_SAR_DIFFDATA, r_buf, 2);
+			if (ret == 0)
+				break;
+
+			usleep_range(10 * 1000, 10 * 1000);
+		}
+	}
+	info->diff = (r_buf[0] << 8) | r_buf[1];
+	input_info(true, &client->dev, "%s: %u\n", __func__, info->diff);
+}
+
+static void touchkey_debug_work_func(struct work_struct *work)
+{
+	struct abov_tk_info *info =
+			container_of(work, struct abov_tk_info, debug_work.work);
+
+	if (info->sar_enable) {
+		get_sar_diff_data(info);
+		if (info->abnormal_mode) {
+			if (info->max_normal_diff < info->diff)
+				info->max_normal_diff = info->diff;
+		}
+	}
+
+	schedule_delayed_work(&info->debug_work, msecs_to_jiffies(2000));
+}
+#endif
 #endif /* CONFIG_TOUCHKEY_GRIP */
 
 static void release_all_fingers(struct abov_tk_info *info)
@@ -967,7 +1020,6 @@ static irqreturn_t abov_tk_interrupt(int irq, void *dev_id)
 #ifdef CONFIG_TOUCHKEY_GRIP
 	int grip_data;
 	u8 grip_press = 0;
-
 	wake_lock(&info->touckey_wake_lock);
 #endif
 
@@ -1022,6 +1074,16 @@ static irqreturn_t abov_tk_interrupt(int irq, void *dev_id)
 			input_report_key(info->input_dev,
 				touchkey_keycode[3], grip_press);
 			info->grip_event =  grip_press;
+#ifdef CONFIG_SEC_FACTORY
+			get_sar_diff_data(info);
+			if (info->abnormal_mode) {
+				if (info->grip_event) {
+					if (info->max_diff < info->diff)
+						info->max_diff = info->diff;
+					info->irq_count++;
+				}
+			}
+#endif
 		}
 #endif
 #ifdef CONFIG_SAMSUNG_PRODUCT_SHIP
@@ -1448,12 +1510,16 @@ static ssize_t touchkey_grip_sw_reset(struct device *dev,
 		return count;
 	}
 
+	disable_irq(info->irq);
 	ret = abov_tk_i2c_write(info->client, ABOV_SW_RESET, &cmd, 1);
 	if (ret < 0) {
 		dev_err(&info->client->dev, "%s fail(%d)\n", __func__, ret);
+		enable_irq(info->irq);
 		return count;
-	}
+	} else
+		usleep_range(35 * 1000, 35 * 1000);
 
+	enable_irq(info->irq);
 	input_info(true, &info->client->dev, "%s data(%d)\n",__func__,data);
 
 	return count;
@@ -1609,6 +1675,64 @@ static ssize_t touchkey_mode_change(struct device *dev,
 }
 #endif
 
+#ifdef CONFIG_SEC_FACTORY
+static ssize_t touchkey_grip_irq_count_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct abov_tk_info *info = dev_get_drvdata(dev);
+
+	int result = 0;
+	s16 max_diff_val = 0;
+
+	if (info->irq_count) {
+		result = -1;
+		max_diff_val = info->max_diff;
+	} else {
+		max_diff_val = info->max_normal_diff;
+	}
+
+	input_info(true, &info->client->dev, "%s - called\n", __func__);
+
+	return snprintf(buf, PAGE_SIZE, "%d,%d,%d\n",
+		result, info->irq_count, max_diff_val);
+}
+
+static ssize_t touchkey_grip_irq_count_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct abov_tk_info *info = dev_get_drvdata(dev);
+
+	u8 onoff;
+	int ret;
+
+	ret = kstrtou8(buf, 10, &onoff);
+	if (ret < 0) {
+		input_err(true, &info->client->dev, "%s - kstrtou8 failed.(%d)\n", __func__, ret);
+		return count;
+	}
+
+	mutex_lock(&info->lock);
+
+	if (onoff == 0) {
+		info->abnormal_mode = 0;
+		cancel_delayed_work_sync(&info->debug_work);
+	} else if (onoff == 1) {
+		info->abnormal_mode = 1;
+		info->irq_count = 0;
+		info->max_diff = 0;
+		info->max_normal_diff = 0;
+		schedule_delayed_work(&info->debug_work, msecs_to_jiffies(1000));
+	} else {
+		input_err(true, &info->client->dev, "%s - unknown value %d\n", __func__, onoff);
+	}
+
+	mutex_unlock(&info->lock);
+
+	input_info(true, &info->client->dev, "%s - %d\n", __func__, onoff);
+	
+	return count;
+}
+#endif
 #endif
 
 static ssize_t touchkey_chip_name(struct device *dev,
@@ -2516,10 +2640,14 @@ static ssize_t flip_cover_mode_enable(struct device *dev,
 #ifdef CONFIG_TOUCHKEY_GRIP
 	if (flip_mode_on) {
 		cmd = 0x10;
+		disable_irq(info->irq);
 		ret = abov_tk_i2c_write(info->client, ABOV_SW_RESET, &cmd, 1);
 		if (ret < 0) {
 			input_err(true, &client->dev, "%s sw_reset fail(%d)\n", __func__, ret);
-		}
+		} else
+			usleep_range(35 * 1000, 35 * 1000);
+
+		enable_irq(info->irq);
 		abov_sar_olny_mode(info, 1);
 	} else {
 		abov_sar_olny_mode(info, 0);
@@ -2859,6 +2987,10 @@ static DEVICE_ATTR(touchkey_sar_press_threshold,  S_IRUGO | S_IWUSR | S_IWGRP ,
 static DEVICE_ATTR(touchkey_sar_release_threshold,  S_IRUGO | S_IWUSR | S_IWGRP ,
 						NULL, touchkey_sar_release_threshold_store);
 #endif
+#ifdef CONFIG_SEC_FACTORY
+static DEVICE_ATTR(grip_irq_count, S_IRUGO | S_IWUSR | S_IWGRP,
+			touchkey_grip_irq_count_show, touchkey_grip_irq_count_store);
+#endif
 #endif
 static DEVICE_ATTR(touchkey_recent, S_IRUGO, touchkey_menu_show, NULL);
 static DEVICE_ATTR(touchkey_back, S_IRUGO, touchkey_back_show, NULL);
@@ -2907,6 +3039,9 @@ static struct attribute *sec_touchkey_attributes[] = {
 	&dev_attr_touchkey_sar_press_threshold.attr,
 	&dev_attr_touchkey_sar_release_threshold.attr,
 #endif /* CONFIG_SAMSUNG_PRODUCT_SHIP */
+#ifdef CONFIG_SEC_FACTORY
+	&dev_attr_grip_irq_count.attr,
+#endif
 #endif /* CONFIG_TOUCHKEY_GRIP */
 	&dev_attr_touchkey_recent.attr,
 	&dev_attr_touchkey_back.attr,
@@ -2995,7 +3130,6 @@ static int abov_tk_fw_check(struct abov_tk_info *info)
 		input_info(true, &client->dev, "%s: firmware update skip, bring up\n", __func__);
 		fw_update = 0;
 	}
-
 flash_fw:
 	if(fw_update){
 		ret = abov_flash_fw(info, true, BUILT_IN);
@@ -3141,10 +3275,14 @@ static void abov_set_ta_status(struct abov_tk_info *info)
 		input_err(true, &info->client->dev, "%s fail(%d)\n", __func__, ret);
 	}
 
+	disable_irq(info->irq);
 	ret = abov_tk_i2c_write(info->client, ABOV_SW_RESET, &cmd_data, 1);
 	if (ret < 0) {
 		dev_err(&info->client->dev, "%s sw reset fail(%d)\n", __func__, ret);
-	}
+	} else
+		usleep_range(35 * 1000, 35 * 1000);
+
+	enable_irq(info->irq);
 }
 
 #ifdef CONFIG_VBUS_NOTIFIER
@@ -3427,6 +3565,10 @@ static int abov_tk_probe(struct i2c_client *client,
 	info->client = client;
 	info->input_dev = input_dev;
 
+#ifdef USE_OPEN_CLOSE
+	info->probe_done = false;
+#endif
+
 #ifdef CONFIG_TOUCHKEY_GRIP
 	wake_lock_init(&info->touckey_wake_lock, WAKE_LOCK_SUSPEND, "touchkey wake lock");
 #endif
@@ -3545,7 +3687,9 @@ static int abov_tk_probe(struct i2c_client *client,
 	set_bit(EV_KEY, input_dev->evbit);
 	set_bit(KEY_RECENT, input_dev->keybit);
 	set_bit(KEY_BACK, input_dev->keybit);
+#ifdef CONFIG_TOUCHKEY_GRIP
 	set_bit(KEY_CP_GRIP, input_dev->keybit);
+#endif
 	set_bit(EV_LED, input_dev->evbit);
 	set_bit(LED_MISC, input_dev->ledbit);
 	input_set_drvdata(input_dev, info);
@@ -3611,6 +3755,9 @@ static int abov_tk_probe(struct i2c_client *client,
 #ifdef CONFIG_TOUCHKEY_GRIP
 	info->sar_sensing = 1;
 	device_init_wakeup(&client->dev, true);
+#ifdef CONFIG_SEC_FACTORY
+	INIT_DELAYED_WORK(&info->debug_work, touchkey_debug_work_func);
+#endif
 #endif /* CONFIG_TOUCHKEY_GRIP */
 
 	input_err(true, &client->dev, "%s done\n", __func__);
@@ -3651,6 +3798,10 @@ static int abov_tk_probe(struct i2c_client *client,
 
 	schedule_delayed_work(&info->efs_open_work, msecs_to_jiffies(2000));
 #endif /* CONFIG_TOUCHKEY_LIGHT_EFS */
+
+#ifdef USE_OPEN_CLOSE
+	info->probe_done = true;
+#endif
 
 	return 0;
 
@@ -3712,6 +3863,10 @@ static int abov_tk_remove(struct i2c_client *client)
 #ifdef CONFIG_TOUCHKEY_GRIP
 	device_init_wakeup(&client->dev, false);
 	wake_lock_destroy(&info->touckey_wake_lock);
+#ifdef CONFIG_SEC_FACTORY
+	cancel_delayed_work_sync(&info->debug_work);
+	flush_delayed_work(&info->debug_work);
+#endif
 #endif
 #ifdef CONFIG_HAS_EARLYSUSPEND
 	unregister_early_suspend(&info->early_suspend);
@@ -3733,6 +3888,13 @@ static void abov_tk_shutdown(struct i2c_client *client)
 #endif
 	input_info(true, &client->dev, "Inside abov_tk_shutdown \n");
 
+#ifdef CONFIG_TOUCHKEY_GRIP
+#ifdef CONFIG_SEC_FACTORY
+	cancel_delayed_work_sync(&info->debug_work);
+	flush_delayed_work(&info->debug_work);
+#endif
+#endif
+
 	if (info->enabled){
 		disable_irq(info->irq);
 #ifdef CONFIG_TOUCHKEY_LED		
@@ -3750,8 +3912,8 @@ static void abov_tk_shutdown(struct i2c_client *client)
 //	kfree(info);
 }
 
-#if defined(CONFIG_PM) && !defined(CONFIG_TOUCHKEY_GRIP)
-static int abov_tk_suspend(struct device *dev)
+#ifndef CONFIG_TOUCHKEY_GRIP
+static int abov_tk_stop(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct abov_tk_info *info = i2c_get_clientdata(client);
@@ -3770,13 +3932,15 @@ static int abov_tk_suspend(struct device *dev)
 
 	if (info->pdata->power)
 		info->pdata->power(info, false);
+
 	return 0;
 }
 
-static int abov_tk_resume(struct device *dev)
+static int abov_tk_start(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct abov_tk_info *info = i2c_get_clientdata(client);
+
 #ifdef CONFIG_TOUCHKEY_LED	
 	u8 led_data;
 #endif
@@ -3807,7 +3971,8 @@ static int abov_tk_resume(struct device *dev)
 
 		input_dbg(true, &info->client->dev, "%s: LED reserved on\n", __func__);
 	}
-#endif /* CONFIG_TOUCHKEY_LED */	
+#endif /* CONFIG_TOUCHKEY_LED */
+
 	enable_irq(info->irq);
 
 	return 0;
@@ -3836,16 +4001,13 @@ static int abov_tk_input_open(struct input_dev *dev)
 {
 	struct abov_tk_info *info = input_get_drvdata(dev);
 
-	input_dbg(true, &info->client->dev, "%s %d \n",__func__,__LINE__);
-	input_info(true, &info->client->dev, "%s: users=%d, v:0x%02x, g(%d), f(%d), k(%d)\n", __func__,
-		info->input_dev->users, info->fw_ver, info->flip_mode, info->glovemode, info->keyboard_mode);
-#ifdef CONFIG_TOUCHKEY_GRIP
-	if (lpcharge == 1) {
-		input_info(true, &info->client->dev, "%s(lpcharge): sar_enable(%d)\n", __func__, info->sar_enable);
+	/* return if it is called by sec_key_notifier righ after run input_register_device */
+	if (!info->probe_done)
 		return 0;
-	}
 
-	input_info(true, &info->client->dev, "%s: sar_enable(%d)\n", __func__, info->sar_enable);
+#ifdef CONFIG_TOUCHKEY_GRIP
+	input_info(true, &info->client->dev, 
+			"%s: sar_enable(%d)\n", __func__, info->sar_enable);
 
 #ifdef CONFIG_TOUCHKEY_LED
 	abov_led_power(info, true);
@@ -3859,7 +4021,7 @@ static int abov_tk_input_open(struct input_dev *dev)
 	if (device_may_wakeup(&info->client->dev))
 		disable_irq_wake(info->irq );
 #else
-	abov_tk_resume(&info->client->dev);
+	abov_tk_start(&info->client->dev);
 	if (info->pinctrl)
 		abov_pinctrl_configure(info, true);
 
@@ -3881,11 +4043,9 @@ static void abov_tk_input_close(struct input_dev *dev)
 {
 	struct abov_tk_info *info = input_get_drvdata(dev);
 
-	input_dbg(true, &info->client->dev, "%s %d \n",__func__,__LINE__);
-	input_info(true, &info->client->dev, "%s: users=%d\n", __func__,
-		   info->input_dev->users);
 #ifdef CONFIG_TOUCHKEY_GRIP
-	input_info(true, &info->client->dev, "%s: sar_enable(%d)\n", __func__, info->sar_enable);
+	input_info(true, &info->client->dev,
+			"%s: sar_enable(%d)\n", __func__, info->sar_enable);
 	abov_sar_olny_mode(info, 1);
 
 	if (device_may_wakeup(&info->client->dev))
@@ -3896,7 +4056,9 @@ static void abov_tk_input_close(struct input_dev *dev)
 #endif /* CONFIG_TOUCHKEY_LED */
 
 #else
-	abov_tk_suspend(&info->client->dev);
+	input_info(true, &info->client->dev, 
+			"%s: users=%d\n", __func__, info->input_dev->users);
+	abov_tk_stop(&info->client->dev);
 	if (info->pinctrl)
 		abov_pinctrl_configure(info, false);
 #endif /* CONFIG_TOUCHKEY_GRIP */
@@ -3907,15 +4069,23 @@ static void abov_tk_input_close(struct input_dev *dev)
 
 }
 #endif /* USE_OPEN_CLOSE */
- 
-#ifndef CONFIG_TOUCHKEY_GRIP
-#if defined(CONFIG_PM) && !defined(CONFIG_HAS_EARLYSUSPEND) &&!defined(USE_OPEN_CLOSE)
+
+#ifdef CONFIG_PM
+static int abov_tk_pm_suspend(struct device *dev)
+{
+	return 0;
+}
+
+static int abov_tk_pm_resume(struct device *dev)
+{
+	return 0;
+}
+
 static const struct dev_pm_ops abov_tk_pm_ops = {
-	.suspend = abov_tk_suspend,
-	.resume = abov_tk_resume,
+	.suspend = abov_tk_pm_suspend,
+	.resume = abov_tk_pm_resume,
 };
 #endif
-#endif /* CONFIG_TOUCHKEY_GRIP */
 
 static const struct i2c_device_id abov_tk_id[] = {
 	{ABOV_TK_NAME, 0},

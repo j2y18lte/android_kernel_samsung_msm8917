@@ -163,6 +163,7 @@ fw-shipped-$(CONFIG_TOUCHSCREEN_IST30XXH) += tsp_imagis/ist3038h_j2y18.fw  \
 					tsp_imagis/ist3038h_j2y18_octa_cmcs.bin
 fw-shipped-$(CONFIG_TOUCHSCREEN_ZINITIX_BT431) += tsp_zinitix/bt431_j23g.fw					
 fw-shipped-$(CONFIG_KEYBOARD_ABOV_TOUCH_T316) += abov/a96t316au_j2y18.fw
+fw-shipped-$(CONFIG_KEYBOARD_ABOV_TOUCH_T316) += abov/a96t316au_j2y18eur.fw
 fw-shipped-$(CONFIG_KEYBOARD_ABOV_TOUCH_T316) += abov/a96t316au_j2y18ver02.fw
 endif
 ifdef CONFIG_SEC_J8PLTE_PROJECT
