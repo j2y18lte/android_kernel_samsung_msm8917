@@ -34,6 +34,24 @@
 		/delete-property/ i2c4;
 		i2c6 = &i2c_6;
 	};
+
+	firmware {
+		android {
+			compatible = "android,firmware";
+
+			fstab {
+				compatible = "android,fstab";
+
+				system {
+					compatible = "android,system";
+					dev = "/dev/block/platform/soc/7824900.sdhci/by-name/system";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1";
+					fsmgr_flags = "wait,first_stage_mount";
+				};
+			};
+		};
+	};
 };
 
 &pm8937_vadc {

@@ -129,3 +129,10 @@
 &ss_dsi_panel_PBA_BOOTING_HD {
 	samsung,panel-vendor = "BOE";
 };
+
+&mdss_mdp {
+	qcom,mdss-clk-factor = <0x96 0x64>;
+
+	/delete-property/ qcom,mdss-rot-downscale-min;
+	/delete-property/ qcom,mdss-rot-downscale-max;
+};
