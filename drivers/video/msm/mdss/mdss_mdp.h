@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -56,7 +56,7 @@
 #define C0_G_Y		0	/* G/luma */
 
 /* wait for at most 2 vsync for lowest refresh rate (24hz) */
-#define KOFF_TIMEOUT msecs_to_jiffies(84)
+#define KOFF_TIMEOUT msecs_to_jiffies(1000)
 
 #define OVERFETCH_DISABLE_TOP		BIT(0)
 #define OVERFETCH_DISABLE_BOTTOM	BIT(1)
@@ -347,6 +347,10 @@ struct mdss_mdp_ctl_intfs_ops {
 
 	/* to update lineptr, [1..yres] - enable, 0 - disable */
 	int (*update_lineptr)(struct mdss_mdp_ctl *ctl, bool enable);
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	int (*wait_video_pingpong) (struct mdss_mdp_ctl *ctl, void *arg);
+#endif
 };
 
 struct mdss_mdp_ctl {
@@ -1609,8 +1613,7 @@ int mdss_mdp_argc_config(struct msm_fb_data_type *mfd,
 int mdss_mdp_hist_lut_config(struct msm_fb_data_type *mfd,
 			struct mdp_hist_lut_data *config, u32 *copyback);
 int mdss_mdp_pp_default_overlay_config(struct msm_fb_data_type *mfd,
-					struct mdss_panel_data *pdata,
-					bool enable);
+					struct mdss_panel_data *pdata);
 int mdss_mdp_dither_config(struct msm_fb_data_type *mfd,
 			struct mdp_dither_cfg_data *config, u32 *copyback,
 			   int copy_from_kernel);
@@ -1778,4 +1781,8 @@ void mdss_mdp_free_layer_pp_info(struct mdp_input_layer *layer)
 }
 
 #endif /* CONFIG_FB_MSM_MDP_NONE */
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+void samsung_timing_engine_control(int enable);
+#endif
 #endif /* MDSS_MDP_H */

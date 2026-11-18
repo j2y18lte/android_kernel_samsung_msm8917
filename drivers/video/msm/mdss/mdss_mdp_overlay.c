@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -28,6 +28,10 @@
 #include <linux/sw_sync.h>
 #include <linux/kmemleak.h>
 
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+#include "../../../video/msm/mdss/samsung/ss_dsi_panel_common.h" /* UTIL HEADER */
+#endif
+
 #include <soc/qcom/event_timer.h>
 #include <linux/msm-bus.h>
 #include "mdss.h"
@@ -47,12 +51,6 @@
 	((flags & MDSS_MDP_RIGHT_MIXER) || (dst_x >= left_lm_w))
 
 #define BUF_POOL_SIZE 32
-
-#define DFPS_DATA_MAX_HFP 8192
-#define DFPS_DATA_MAX_HBP 8192
-#define DFPS_DATA_MAX_HPW 8192
-#define DFPS_DATA_MAX_FPS 0x7fffffff
-#define DFPS_DATA_MAX_CLK_RATE 250000
 
 static int mdss_mdp_overlay_free_fb_pipe(struct msm_fb_data_type *mfd);
 static int mdss_mdp_overlay_fb_parse_dt(struct msm_fb_data_type *mfd);
@@ -991,6 +989,24 @@ skip_reconfigure:
 
 	mdss_mdp_pipe_unmap(pipe);
 
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	pr_debug("L_mixer:%d R_mixer:%d %s z:%d format:%d flag:0x%x src.x:%d y:%d w:%d h:%d "
+			"des_rect.x:%d y:%d w:%d h:%d mdss\n",
+			pipe->mixer_left ? pipe->mixer_left->num : -1,
+			pipe->mixer_right? pipe->mixer_right->num : -1,
+			pipe->ndx == BIT(0) ? "VG0" : pipe->ndx == BIT(1) ? "VG1" :
+			pipe->ndx == BIT(2) ? "VG2" : pipe->ndx == BIT(3) ? "RGB0" :
+			pipe->ndx == BIT(4) ? "RGB1" : pipe->ndx == BIT(5) ? "RGB2" :
+			pipe->ndx == BIT(6) ? "DMA0" : pipe->ndx == BIT(7) ? "DMA1":
+			pipe->ndx == BIT(8) ? "VG3" : pipe->ndx == BIT(9) ? "RGB3":
+			pipe->ndx == BIT(10) ? "CURSOR0" : pipe->ndx == BIT(11) ? "CURSOR1" : "MAX_SSPP",
+			pipe->mixer_stage - MDSS_MDP_STAGE_0,
+			pipe->src_fmt->format,
+			pipe->flags,
+			pipe->src.x, pipe->src.y, pipe->src.w, pipe->src.h,
+			pipe->dst.x, pipe->dst.y, pipe->dst.w, pipe->dst.h);
+#endif
+
 	return ret;
 exit_fail:
 	mdss_mdp_pipe_unmap(pipe);
@@ -1627,6 +1643,24 @@ static int __overlay_queue_pipes(struct msm_fb_data_type *mfd)
 
 			__unstage_pipe_and_clean_buf(mfd, pipe, buf);
 		}
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+		pr_debug("L_mixer:%d R_mixer:%d %s z:%d format:%d flag:0x%x src.x:%d y:%d w:%d h:%d "
+			"des_rect.x:%d y:%d w:%d h:%d mdss\n",
+			pipe->mixer_left ? pipe->mixer_left->num : -1,
+			pipe->mixer_right? pipe->mixer_right->num : -1,
+			pipe->ndx == BIT(0) ? "VG0" : pipe->ndx == BIT(1) ? "VG1" :
+			pipe->ndx == BIT(2) ? "VG2" : pipe->ndx == BIT(3) ? "RGB0" :
+			pipe->ndx == BIT(4) ? "RGB1" : pipe->ndx == BIT(5) ? "RGB2" :
+			pipe->ndx == BIT(6) ? "DMA0" : pipe->ndx == BIT(7) ? "DMA1":
+			pipe->ndx == BIT(8) ? "VG3" : pipe->ndx == BIT(9) ? "RGB3":
+			pipe->ndx == BIT(10) ? "CURSOR0" : pipe->ndx == BIT(11) ? "CURSOR1" : "MAX_SSPP",
+			pipe->mixer_stage - MDSS_MDP_STAGE_0,
+			pipe->src_fmt->format,
+			pipe->flags,
+			pipe->src.x, pipe->src.y, pipe->src.w, pipe->src.h,
+			pipe->dst.x, pipe->dst.y, pipe->dst.w, pipe->dst.h);
+#endif
 	}
 
 	return 0;
@@ -2185,6 +2219,11 @@ int mdss_mdp_overlay_kickoff(struct msm_fb_data_type *mfd,
 	}
 
 	mdss_fb_update_notify_update(mfd);
+
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	mdss_mdp_ctl_intf_event(mdp5_data->ctl, MDSS_SAMSUNG_EVENT_FRAME_UPDATE, NULL, false);
+#endif
+
 commit_fail:
 	ATRACE_BEGIN("overlay_cleanup");
 	mdss_mdp_overlay_cleanup(mfd, &mdp5_data->pipes_destroy);
@@ -3087,13 +3126,6 @@ static ssize_t dynamic_fps_sysfs_wta_dfps(struct device *dev,
 		return count;
 	}
 
-	if (data.hfp > DFPS_DATA_MAX_HFP || data.hbp > DFPS_DATA_MAX_HBP ||
-		data.hpw > DFPS_DATA_MAX_HPW || data.fps > DFPS_DATA_MAX_FPS ||
-		data.clk_rate > DFPS_DATA_MAX_CLK_RATE){
-		pr_err("Data values out of bound.\n");
-		return -EINVAL;
-	}
-
 	rc = mdss_mdp_dfps_update_params(mfd, pdata, &data);
 	if (rc) {
 		pr_err("failed to set dfps params\n");
@@ -3880,21 +3912,12 @@ static int mdss_mdp_hw_cursor_pipe_update(struct msm_fb_data_type *mfd,
 		start_y = 0;
 	}
 
-	if ((img->width > mdata->max_cursor_size) ||
-		(img->height > mdata->max_cursor_size) ||
-		(img->depth != 32) || (start_x >= xres) ||
-		(start_y >= yres)) {
-		pr_err("Invalid cursor image coordinates\n");
-		ret = -EINVAL;
-		goto done;
-	}
-
 	roi.w = min(xres - start_x, img->width - roi.x);
 	roi.h = min(yres - start_y, img->height - roi.y);
 
 	if ((roi.w > mdata->max_cursor_size) ||
-		(roi.h > mdata->max_cursor_size)) {
-		pr_err("Invalid cursor ROI size\n");
+		(roi.h > mdata->max_cursor_size) ||
+		(img->depth != 32) || (start_x >= xres) || (start_y >= yres)) {
 		ret = -EINVAL;
 		goto done;
 	}
@@ -4397,12 +4420,16 @@ static int mdss_fb_get_metadata(struct msm_fb_data_type *mfd,
 		ret = mdss_fb_get_hw_caps(mfd, &metadata->data.caps);
 		break;
 	case metadata_op_get_ion_fd:
-		if (mfd->fb_ion_handle) {
+		if (mfd->fb_ion_handle && mfd->fb_ion_client) {
+			get_dma_buf(mfd->fbmem_buf);
 			metadata->data.fbmem_ionfd =
-				dma_buf_fd(mfd->fbmem_buf, 0);
-			if (metadata->data.fbmem_ionfd < 0)
+				ion_share_dma_buf_fd(mfd->fb_ion_client,
+					mfd->fb_ion_handle);
+			if (metadata->data.fbmem_ionfd < 0) {
+				dma_buf_put(mfd->fbmem_buf);
 				pr_err("fd allocation failed. fd = %d\n",
 						metadata->data.fbmem_ionfd);
+			}
 		}
 		break;
 	case metadata_op_crc:
@@ -5015,6 +5042,25 @@ static void mdss_mdp_set_lm_flag(struct msm_fb_data_type *mfd)
 	}
 }
 
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+struct samsung_display_driver_data* mdss_samsung_get_vdd(struct mdss_mdp_ctl *ctl)
+{
+	struct samsung_display_driver_data *vdd = NULL;
+	struct mdss_dsi_ctrl_pdata *ctrl_pdata = NULL;
+
+	ctrl_pdata = container_of(ctl->panel_data, struct mdss_dsi_ctrl_pdata,
+				panel_data);
+
+	vdd = check_valid_ctrl(ctrl_pdata);
+	if (IS_ERR_OR_NULL(vdd)) {
+		pr_err("%s: Invalid data ctrl : 0x%zx\n", __func__, (size_t)vdd);
+		return NULL;
+	}
+
+	return vdd;
+}
+#endif
+
 static void mdss_mdp_handle_invalid_switch_state(struct msm_fb_data_type *mfd)
 {
 	int rc = 0;
@@ -5181,6 +5227,9 @@ static int mdss_mdp_overlay_off(struct msm_fb_data_type *mfd)
 	int need_cleanup;
 	int retire_cnt;
 	bool destroy_ctl = false;
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	struct samsung_display_driver_data *vdd = NULL;
+#endif
 
 	if (!mfd)
 		return -ENODEV;
@@ -5195,6 +5244,9 @@ static int mdss_mdp_overlay_off(struct msm_fb_data_type *mfd)
 		return -ENODEV;
 	}
 
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+	vdd = mdss_samsung_get_vdd(mdp5_data->ctl);
+#endif
 	/*
 	 * Keep a reference to the runtime pm until the overlay is turned
 	 * off, and then release this last reference at the end. This will
@@ -5922,19 +5974,23 @@ static int mdss_mdp_scaler_lut_init(struct mdss_data_type *mdata,
 		struct mdp_scale_luts_info *lut_tbl)
 {
 	struct mdss_mdp_qseed3_lut_tbl *qseed3_lut_tbl;
-	int ret;
+	int ret = 0;
 
 	if (!mdata->scaler_off)
 		return -EFAULT;
 
+	mutex_lock(&mdata->scaler_off->scaler_lock);
+		
 	qseed3_lut_tbl = &mdata->scaler_off->lut_tbl;
 	if ((lut_tbl->dir_lut_size !=
 		DIR_LUT_IDX * DIR_LUT_COEFFS * sizeof(uint32_t)) ||
 		(lut_tbl->cir_lut_size !=
 		 CIR_LUT_IDX * CIR_LUT_COEFFS * sizeof(uint32_t)) ||
 		(lut_tbl->sep_lut_size !=
-		 SEP_LUT_IDX * SEP_LUT_COEFFS * sizeof(uint32_t)))
-			return -EINVAL;
+		SEP_LUT_IDX * SEP_LUT_COEFFS * sizeof(uint32_t))) {
+		mutex_unlock(&mdata->scaler_off->scaler_lock);
+		return -EINVAL;
+	}
 
 	if (!qseed3_lut_tbl->dir_lut) {
 		qseed3_lut_tbl->dir_lut = devm_kzalloc(&mdata->pdev->dev,
@@ -5942,7 +5998,7 @@ static int mdss_mdp_scaler_lut_init(struct mdss_data_type *mdata,
 				GFP_KERNEL);
 		if (!qseed3_lut_tbl->dir_lut) {
 			ret = -ENOMEM;
-			goto fail;
+			goto err;
 		}
 	}
 
@@ -5952,7 +6008,7 @@ static int mdss_mdp_scaler_lut_init(struct mdss_data_type *mdata,
 				GFP_KERNEL);
 		if (!qseed3_lut_tbl->cir_lut) {
 			ret = -ENOMEM;
-			goto fail;
+			goto fail_free_dir_lut;
 		}
 	}
 
@@ -5962,7 +6018,7 @@ static int mdss_mdp_scaler_lut_init(struct mdss_data_type *mdata,
 				GFP_KERNEL);
 		if (!qseed3_lut_tbl->sep_lut) {
 			ret = -ENOMEM;
-			goto fail;
+			goto fail_free_cir_lut;
 		}
 	}
 
@@ -5974,32 +6030,41 @@ static int mdss_mdp_scaler_lut_init(struct mdss_data_type *mdata,
 				(void *)(unsigned long)lut_tbl->dir_lut,
 				lut_tbl->dir_lut_size)) {
 			ret = -EINVAL;
-			goto err;
+			goto fail_free_sep_lut;
 	}
 
 	if (copy_from_user(qseed3_lut_tbl->cir_lut,
 				(void *)(unsigned long)lut_tbl->cir_lut,
 				lut_tbl->cir_lut_size)) {
 			ret = -EINVAL;
-			goto err;
+			goto fail_free_sep_lut;
 	}
 
 	if (copy_from_user(qseed3_lut_tbl->sep_lut,
 				(void *)(unsigned long)lut_tbl->sep_lut,
 				lut_tbl->sep_lut_size)) {
 			ret = -EINVAL;
-			goto err;
+			goto fail_free_sep_lut;
 	}
 
 	qseed3_lut_tbl->valid = true;
+	mutex_unlock(&mdata->scaler_off->scaler_lock);
+
 	return ret;
 
-fail:
-	kfree(qseed3_lut_tbl->dir_lut);
-	kfree(qseed3_lut_tbl->cir_lut);
-	kfree(qseed3_lut_tbl->sep_lut);
+fail_free_sep_lut:
+	devm_kfree(&mdata->pdev->dev, qseed3_lut_tbl->sep_lut);
+fail_free_cir_lut:
+	devm_kfree(&mdata->pdev->dev, qseed3_lut_tbl->cir_lut);
+fail_free_dir_lut:
+	devm_kfree(&mdata->pdev->dev, qseed3_lut_tbl->dir_lut);
 err:
+	qseed3_lut_tbl->dir_lut = NULL;
+	qseed3_lut_tbl->cir_lut = NULL;
+	qseed3_lut_tbl->sep_lut = NULL;
 	qseed3_lut_tbl->valid = false;
+	mutex_unlock(&mdata->scaler_off->scaler_lock);
+
 	return ret;
 }
 

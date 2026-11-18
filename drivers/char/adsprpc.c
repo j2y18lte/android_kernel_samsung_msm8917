@@ -1063,7 +1063,7 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 	for (oix = 0; oix < inbufs + outbufs; ++oix) {
 		int i = ctx->overps[oix]->raix;
 		struct fastrpc_mmap *map = ctx->maps[i];
-		ssize_t mlen;
+		ssize_t mlen = ctx->overps[oix]->mend - ctx->overps[oix]->mstart;
 		uint64_t buf;
 		ssize_t len = lpra[i].buf.len;
 		if (!len)
@@ -1074,7 +1074,6 @@ static int get_args(uint32_t kernel, struct smq_invoke_ctx *ctx)
 			rlen -= ALIGN(args, BALIGN) - args;
 			args = ALIGN(args, BALIGN);
 		}
-		mlen = ctx->overps[oix]->mend - ctx->overps[oix]->mstart;
 		VERIFY(err, rlen >= mlen);
 		if (err)
 			goto bail;
@@ -1394,9 +1393,15 @@ static int fastrpc_init_process(struct fastrpc_file *fl,
 		inbuf.pgid = current->tgid;
 		inbuf.namelen = strlen(current->comm) + 1;
 		inbuf.filelen = init->filelen;
+		if (!access_ok(0, (void const __user *)init->file,
+				init->filelen))
+			goto bail;
 		VERIFY(err, !fastrpc_mmap_create(fl, init->filefd, init->file,
 					init->filelen, mflags, &file));
 		if (err)
+			goto bail;
+		if (!access_ok(1, (void const __user *)init->mem,
+				init->memlen))
 			goto bail;
 		inbuf.pageslen = 1;
 		VERIFY(err, !fastrpc_mmap_create(fl, init->memfd, init->mem,
@@ -1874,10 +1879,8 @@ static void file_free_work_handler(struct work_struct *w)
 			break;
 		}
 		mutex_unlock(&me->flfree_mutex);
-		if (freefl) {
+		if (freefl)
 			fastrpc_file_free(freefl->fl);
-			kfree(freefl);
-		}
 		mutex_lock(&me->flfree_mutex);
 
 		if (hlist_empty(&me->fls)) {
@@ -1887,6 +1890,7 @@ static void file_free_work_handler(struct work_struct *w)
 			break;
 		}
 		mutex_unlock(&me->flfree_mutex);
+		kfree(freefl);
 	}
 	return;
 }

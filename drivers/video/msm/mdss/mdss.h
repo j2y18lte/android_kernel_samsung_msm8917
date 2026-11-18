@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -232,6 +232,13 @@ struct mdss_scaler_block {
 	u32 *dest_scaler_off;
 	u32 *dest_scaler_lut_off;
 	struct mdss_mdp_qseed3_lut_tbl lut_tbl;
+
+	/*
+	 * Lock is mainly to serialize access to LUT.
+	 * LUT values come asynchronously from userspace
+	 * via ioctl.
+	 */
+	struct mutex scaler_lock;	
 };
 
 struct mdss_data_type;
@@ -589,4 +596,8 @@ static inline bool mdss_has_quirk(struct mdss_data_type *mdata,
 #define MDSS_REG_READ(mdata, offset) \
 		dss_reg_r(&mdata->mdss_io, offset, 0)
 
+#if defined(CONFIG_FB_MSM_MDSS_SAMSUNG)
+extern void mdss_dump_reg(const char *dump_name, u32 reg_dump_flag,
+		char *addr, int len, u32 **dump_mem, bool from_isr);
+#endif
 #endif /* MDSS_H */

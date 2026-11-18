@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -350,11 +350,10 @@ static ssize_t inst_info_read(struct file *file, char __user *buf,
 	write_str(&dbg_buf, "FBD Count: %d\n", inst->count.fbd);
 
 	publish_unreleased_reference(inst);
+	put_inst(inst);
 	len = simple_read_from_buffer(buf, count, ppos,
 		dbg_buf.ptr, dbg_buf.filled_size);
-
 	mutex_unlock(&dbg_buf.lock);
-	put_inst(inst);
 	return len;
 }
 
