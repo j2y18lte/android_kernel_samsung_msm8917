@@ -1615,9 +1615,7 @@ static void print_cmd_desc(struct mdss_dsi_ctrl_pdata *ctrl,
 		struct dsi_cmd_desc *cmds, int cnt)
 {
 	struct samsung_display_driver_data *vdd = NULL;
-	char buf[1016]; // temp 1024 -> 1000
-	int len;
-	int i,j;
+	int i, j;
 
 	if (IS_ERR_OR_NULL(ctrl))
 		return;
@@ -1633,19 +1631,17 @@ static void print_cmd_desc(struct mdss_dsi_ctrl_pdata *ctrl,
 		return;
 	}
 
-	for (j=0; j < cnt; j++) {
-		len = 0;
-		len += sprintf(buf, "%02x ", cmds[j].dchdr.dtype);
-		len += sprintf(buf + len, "%02x ", cmds[j].dchdr.last);
-		len += sprintf(buf + len, "%02x ", cmds[j].dchdr.vc);
-		len += sprintf(buf + len, "%02x ", cmds[j].dchdr.ack);
-		len += sprintf(buf + len, "%02x ", cmds[j].dchdr.wait);
-		len += sprintf(buf + len, "%02x ", cmds[j].dchdr.dlen);
+	for (j = 0; j < cnt; j++) {
+		const struct dsi_ctrl_hdr *hdr = &cmds[j].dchdr;
 
-		for (i = 0; i < cmds[j].dchdr.dlen; i++)
-			len += sprintf(buf + len, "%02x ", cmds[j].payload[i]);
+		LCD_INFO("(%02d) %02x %02x %02x %02x %02x %02x\n",
+			 j, hdr->dtype, hdr->last, hdr->vc, hdr->ack,
+			 hdr->wait, hdr->dlen);
 
-		LCD_INFO("(%02d) %s\n", j, buf);
+		for (i = 0; i < hdr->dlen; i += 32)
+			LCD_INFO("(%02d) payload[%d]: %*ph\n", j, i,
+				 min_t(int, 32, hdr->dlen - i),
+				 cmds[j].payload + i);
 	}
 
 	return;
