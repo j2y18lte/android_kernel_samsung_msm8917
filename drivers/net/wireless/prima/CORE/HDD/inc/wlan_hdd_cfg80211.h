@@ -203,6 +203,10 @@ enum qca_nl80211_vendor_subcmds {
     /* send BSS Information */
     QCA_NL80211_VENDOR_SUBCMD_GET_STATION = 121,
 
+    /* Start / Stop the NUD stats collections */
+    QCA_NL80211_VENDOR_SUBCMD_NUD_STATS_SET = 149,
+    /* Get the NUD stats, represented by the enum qca_attr_nud_stats_get */
+    QCA_NL80211_VENDOR_SUBCMD_NUD_STATS_GET = 150,
 };
 
 /**
@@ -348,7 +352,6 @@ enum qca_wlan_vendor_attr_get_station_info {
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_VHT_OPERATION
 #define INFO_ASSOC_FAIL_REASON \
 	QCA_WLAN_VENDOR_ATTR_GET_STATION_INFO_ASSOC_FAIL_REASON
-
 
 enum qca_nl80211_vendor_subcmds_index {
 #ifdef FEATURE_WLAN_CH_AVOID

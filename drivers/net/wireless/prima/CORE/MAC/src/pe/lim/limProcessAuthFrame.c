@@ -234,7 +234,6 @@ limProcessAuthFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession pse
     vos_mem_set(authFrame, sizeof(tSirMacAuthFrameBody), 0);
     vos_mem_set(plainBody, LIM_ENCR_AUTH_BODY_LEN, 0);
     vos_mem_set(challengeTextArray, SIR_MAC_SAP_AUTH_CHALLENGE_LENGTH, 0);
-  
     /// Determine if WEP bit is set in the FC or received MAC header
     if (pHdr->fc.wep)
     {
@@ -1321,7 +1320,8 @@ limProcessAuthFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession pse
                                                                LIM_ENCR_AUTH_INFO_LEN);
                                 if (!encrAuthFrame) {
                                     limLog(pMac, LOGE, FL("failed to allocate memory"));
-                                    goto free;                                }
+                                    goto free;
+                                }
                                 vos_mem_set(encrAuthFrame, pRxAuthFrameBody->length +
                                             LIM_ENCR_AUTH_INFO_LEN, 0);
 

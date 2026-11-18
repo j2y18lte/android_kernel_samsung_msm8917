@@ -144,6 +144,10 @@ typedef enum {
 #ifdef WLAN_FEATURE_ROAM_SCAN_OFFLOAD
    PER_BASED_ROAMING = 63,
 #endif
+   NUD_DEBUG = 68,
+   FATAL_EVENT_LOGGING = 69,
+   /*70 reserved for WIFI_DUAL_BAND_ENABLE */
+   PROBE_RSP_TEMPLATE_VER1 = 71,
    //MAX_FEATURE_SUPPORTED = 128
 } placeHolderInCapBitmap;
 

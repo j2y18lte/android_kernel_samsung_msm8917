@@ -3749,7 +3749,6 @@ limSendAuthMgmtFrame(tpAniSirGlobal pMac,
          * 128 bytes for challenge text and 4 bytes each for
          * IV & ICV.
          */
-
         bodyLen = wep_challenge_len + LIM_ENCR_AUTH_INFO_LEN;
         frameLen = sizeof(tSirMacMgmtHdr) + bodyLen;
     } // if (wepBit == LIM_WEP_IN_FC)
